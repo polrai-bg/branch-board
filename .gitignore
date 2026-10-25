@@ -1,0 +1,12 @@
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+.DS_Store
+
+# Personal data: never commit
+branchboard.config.json
+.env.local
+.env*.local
+.branchboard/
+plan/

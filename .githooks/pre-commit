@@ -1,0 +1,9 @@
+#!/bin/sh
+# Blocks commits that leak tokens or personal config values.
+set -e
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks git --staged --no-banner --redact
+else
+  echo "pre-commit: gitleaks not installed, skipping token scan (brew install gitleaks)" >&2
+fi
+node scripts/check-private.mjs

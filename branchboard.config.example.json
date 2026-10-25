@@ -1,0 +1,25 @@
+{
+  "github": {
+    "owner": "your-github-user"
+  },
+  "repos": [
+    { "name": "repo-one", "localPath": "~/code/repo-one", "bases": ["main", "development"] },
+    { "name": "repo-two", "localPath": null, "bases": ["main"] }
+  ],
+  "agents": [
+    { "prefix": "cursor/", "agent": "Cursor" },
+    { "prefix": "claude/", "agent": "Claude" },
+    { "prefix": "ccr-", "agent": "Claude (cloud)" },
+    { "prefix": "codex/", "agent": "Codex" },
+    { "prefix": "grok-bot-sync-", "agent": "Grok Bot" },
+    { "prefix": "grok/", "agent": "Grok Build" },
+    { "prefix": "grok-build/", "agent": "Grok Build" },
+    { "prefix": "copilot/", "agent": "Copilot" }
+  ],
+  "branchOverrides": [
+    { "repo": "repo-one", "branch": "some-branch", "agent": "Me", "ignore": false }
+  ],
+  "refreshMinutes": 2,
+  "staleDays": 7,
+  "hideMergedByDefault": true
+}
