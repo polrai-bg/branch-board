@@ -42,6 +42,14 @@ function ago(iso: string | null) {
 
 const days = (d: number) => (d <= 0 ? "today" : d === 1 ? "1 day" : `${d} days`);
 
+// Browsers block file:// links, so the server opens the folder. If that fails, copy the path instead.
+async function openFolder(path: string) {
+  const res = await fetch("/api/open", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path }) }).catch(() => null);
+  if (res?.ok) return;
+  await navigator.clipboard.writeText(path).catch(() => {});
+  alert(`Could not open the folder. Path copied:\n${path}`);
+}
+
 function displayPath(path: string) {
   const home = /^\/Users\/[^/]+/.exec(path);
   return home ? `~${path.slice(home[0].length)}` : path;
@@ -233,7 +241,13 @@ export default function Board() {
                   {row.where === "Local" ? (
                     <span title={row.detached ? row.localPath ?? undefined : undefined}>{branchLabel(row)}</span>
                   ) : (
-                    <a className="hover:underline" href={`${gh}/${row.repo}/tree/${encodeURI(row.name)}`} target="_blank" rel="noreferrer">
+                    <a
+                      className="text-blue-600 hover:underline dark:text-blue-400"
+                      href={`${gh}/${row.repo}/tree/${row.name.split("/").map(encodeURIComponent).join("/")}`}
+                      title="Open this branch on GitHub"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
                       {row.name}
                     </a>
                   )}
@@ -280,9 +294,14 @@ export default function Board() {
                 </td>
                 <td className="px-2 py-1.5 font-mono text-xs">
                   {row.localPath && (
-                    <a className="hover:underline" href={`file://${encodeURI(row.localPath)}`} title={row.localPath}>
+                    <button
+                      type="button"
+                      className="text-left font-mono text-blue-600 hover:underline dark:text-blue-400"
+                      title={`Open in Finder: ${row.localPath}`}
+                      onClick={() => openFolder(row.localPath!)}
+                    >
                       {displayPath(row.localPath)}
-                    </a>
+                    </button>
                   )}
                 </td>
               </tr>
