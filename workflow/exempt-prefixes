@@ -1,0 +1,4 @@
+# Branch prefixes that skip the work-item check, one per line.
+# A commit or pull request whose branch starts with one of these prefixes passes.
+# The line below is an example for an automated sync bot. Remove it if you do not want that exemption.
+grok-bot-sync-

@@ -62,6 +62,10 @@ A branch squash-merged by hand without a PR shows as WIP. Hide it with a `branch
 
 `npm test`
 
+## Work-item workflow
+
+`workflow/` is a generic kit another repository can copy: agent instructions, a GitHub issue template, a handoff comment, a `commit-msg` hook, and a pull request check. `workflow/README.md` says where each file goes.
+
 ## License
 
 AGPL-3.0-only.
