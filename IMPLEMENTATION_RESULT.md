@@ -55,7 +55,7 @@ The board reconciles GitHub rows with local branches, links issues, applies the 
 | AC-05 Local only, live | PASS. `bb-verify-local-only` showed Where Local, status Local only, and Orphan, then was deleted. Nothing else in that repo was changed. |
 | AC-06 Unchanged GitHub rows | PASS for GitHub-only rows against the pre-change snapshot. Seven rows stayed GitHub and kept the same status and base. One snapshot row is now Both because that branch also exists locally. |
 | AC-07 Daily counts | PASS. `/api/counts` and `npm run counts` match the chip totals for today. |
-| AC-08 Hygiene | PASS if this commit's pre-commit hook exits 0. The diff against `main` does not add git-ignored files. Tests do not read the real config. |
+| AC-08 Hygiene | PASS. The pre-commit hook ran and exited 0 (gitleaks and the private-value check). The diff against `main` adds no git-ignored files. Tests do not read the real config. |
 
 ## Deviations
 
@@ -90,8 +90,8 @@ The board reconciles GitHub rows with local branches, links issues, applies the 
 ## Git
 
 - Branch: `phase-1-reconciliation`, cut from `main` at `f333a16`.
-- Latest commit: the commit that adds this file. Read it with `git rev-parse --short HEAD` on this branch.
-- Uncommitted state at commit time: clean, aside from git-ignored local files (`branchboard.config.json`, `.branchboard/`).
+- Latest commit: the tip of `phase-1-reconciliation`. Read it with `git rev-parse --short HEAD`.
+- Uncommitted state: clean, aside from git-ignored local files (`branchboard.config.json`, `.branchboard/`).
 - Not merged. No remote was added. Not pushed.
 
 ## Recommended next task
