@@ -42,7 +42,7 @@ Flags sit next to the status and can stack.
 | Stale | WIP with no commits in `staleDays` (default 7) |
 | Issue closed | The linked issue is closed and the branch is not merged |
 
-A branch's issue is the first of: a `branchOverrides` entry with `issue`, the PR's closing reference in the same repo, `issuePattern` on the branch name, then `#123` in the newest commit message.
+A branch's issue is the first of: a `branchOverrides` entry with `issue`, the PR's closing reference in the same repo, `issuePattern` on the branch name, then `#123` in the newest commit message. The message counts only when the branch has commits of its own: an untouched branch's newest commit belongs to its base, so a squash message like `Title (#21)` there does not link it.
 
 ## Daily counts
 

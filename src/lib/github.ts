@@ -1,4 +1,4 @@
-import { DEFAULT_ISSUE_PATTERN, pickBase, pickPR, sameRepo, type Comparison, type IssueInfo, type PR, type RemoteBranch } from "./merge.ts";
+import { DEFAULT_ISSUE_PATTERN, hasOwnCommits, pickBase, pickPR, sameRepo, type Comparison, type IssueInfo, type PR, type RemoteBranch } from "./merge.ts";
 
 const API = "https://api.github.com";
 
@@ -129,7 +129,7 @@ function candidateNumbers(owner: string, repo: string, branches: RemoteBranch[],
     re.lastIndex = 0;
     const fromName = re.exec(branch.name);
     if (fromName?.[1] && /^\d+$/.test(fromName[1])) found.add(Number(fromName[1]));
-    const fromMessage = /#(\d+)/.exec(branch.message);
+    const fromMessage = hasOwnCommits(branch) ? /#(\d+)/.exec(branch.message) : null;
     if (fromMessage) found.add(Number(fromMessage[1]));
     for (const pr of branch.prs) {
       for (const closing of pr.closingIssues ?? []) {

@@ -9,7 +9,7 @@ The board reconciles GitHub rows with local branches, links issues, applies the 
 
 - Local collector joins GitHub rows on repo plus branch name. Where is GitHub, Local, or Both.
 - Status order, first match wins: Merged, Conflicts, Open PR, Unsaved, Unpushed, Local only, WIP, Empty.
-- Issue linking, first hit wins: override, same-repo PR closing reference, branch name, newest commit message. Attempt id is `a<N>` right after the issue number in the branch name.
+- Issue linking, first hit wins: override, same-repo PR closing reference, branch name, newest commit message (only when the branch has commits of its own). Attempt id is `a<N>` right after the issue number in the branch name.
 - Flags: Orphan, Overlap, Stalled review, Stale, Issue closed. Unfinished local is the group Unsaved, Unpushed, and Local only.
 - Detached work copies: a dirty one or one whose commit is on no branch is its own row. A clean detached work copy already on a branch is omitted. Prunable or missing worktree folders are skipped.
 - Daily counts in `.branchboard/cache.db`, last refresh of the local calendar day wins, including zeros. Read them at `/api/counts` or `npm run counts`.
@@ -81,6 +81,11 @@ The board reconciles GitHub rows with local branches, links issues, applies the 
 - Counts live in `daily_counts(day, repo, metric, count)`. The read path is `GET /api/counts` and `npm run counts`.
 - Timeouts: `git fetch` 60 seconds, other git commands 20 seconds, GitHub 45 seconds. Worktree status runs with a pool of 4.
 - Open questions OQ-1, OQ-2, and OQ-3 are not decided in code. Defaults are show every branch, `staleDays` 7, `stalledReviewDays` 3, and `exemptPrefixes` `[]`.
+
+## Review fixes
+
+- D-04 revised after review: the commit-message issue source now applies only when the branch has commits of its own (`hasOwnCommits` in `src/lib/merge.ts`, also used by the GitHub issue lookup). Before this, an untouched branch inherited its base's squash or merge message, such as `Title (#21)`, was linked to that PR number, and lost the Orphan flag. Fixture tests cover the squash message, the merge message, unknown comparison, unpushed commits, never-pushed commits, and detached work copies. One existing sort fixture changed as intended: its Empty branch is now Orphan.
+- Live GitHub refresh, run in review with a token held in the environment only: PASS. No errors, and issue title and state came back from GitHub.
 
 ## Issues and follow-up
 

@@ -131,6 +131,26 @@ test("issue linking order: override, closing reference, branch name, commit mess
   assert.equal(linked("feature-x", { message: "no reference" }), null);
 });
 
+test("commit message links only when the branch has commits of its own", () => {
+  const linked = (extra: Parameters<typeof branch>[0]) => linkIssue(cfg, branch({ name: "cursor/new-idea", ...extra }));
+  // An untouched branch's tip is the base's squash or merge commit.
+  assert.equal(linked({ ahead: 0, message: "Add consent banner (#21)" }), null);
+  assert.equal(linked({ ahead: 0, message: "Merge pull request #5 from example-owner/feature" }), null);
+  assert.equal(linked({ ahead: null, message: "fix #8" }), null, "no comparison means unknown, so no message link");
+  assert.equal(linked({ ahead: 2, message: "fix #8" }), 8);
+  assert.equal(linked({ ahead: 0, unpushed: 1, message: "fix #8" }), 8, "unpushed commits are the branch's own");
+  assert.equal(linked({ ahead: 3, neverPushed: true, message: "fix #8" }), 8);
+  assert.equal(linked({ ahead: null, detached: true, offBranch: true, message: "fix #8" }), 8);
+  assert.equal(linked({ ahead: null, detached: true, offBranch: false, dirty: true, message: "fix #8" }), null);
+  // Overrides, closing references, and branch names still link untouched branches.
+  assert.equal(linkIssue(cfg, branch({ name: "cursor/42-slug", ahead: 0, message: "Title (#21)" })), 42);
+
+  const [row] = buildRows(cfg, [branch({ name: "cursor/new-idea", ahead: 0, message: "Add consent banner (#21)" })], NOW);
+  assert.equal(row.status, "Empty");
+  assert.equal(row.issue, null);
+  assert.ok(row.flags.includes("Orphan"));
+});
+
 test("flag rules", () => {
   const issues: IssueInfo[] = [
     { repo: "demo-repo", number: 3, title: "Three", state: "OPEN" },
@@ -212,8 +232,11 @@ test("buildRows joins local status, where, and sort", () => {
   assert.equal(rows.find((row) => row.name === "fresh-wip")?.issue?.title, "Three");
   assert.deepEqual(
     rows.map((row) => row.name),
-    ["conflicted", "detached-wt", "only-local", "ahead", "dirty-local", "old-wip", "open-stalled", "fresh-wip", "open-fresh", "empty-one", "merged-one"],
+    ["conflicted", "detached-wt", "only-local", "ahead", "dirty-local", "old-wip", "empty-one", "open-stalled", "fresh-wip", "open-fresh", "merged-one"],
   );
+  // No commits of its own, so its tip message ("fix #30") is a base commit and does not link it.
+  assert.equal(rows.find((row) => row.name === "empty-one")?.issue, null);
+  assert.ok(rows.find((row) => row.name === "empty-one")?.flags.includes("Orphan"));
   const totals = summaryCounts(rows);
   const stored = countsByRepo(rows, ["demo-repo"]);
   for (const metric of ["Orphan", "Overlap", "Stalled review", "Stale", "Issue closed", "Unfinished local", "Empty"] as const) {

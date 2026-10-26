@@ -140,7 +140,7 @@ If the current code contradicts an approved decision here, change the code. If a
 1. A `branchOverrides` entry with an `issue` field. This is a Clarification: it mirrors how overrides already win for agent detection.
 2. The PR's closing references (`closingIssuesReferences`, from `Closes #42`).
 3. The branch name, matched by `issuePattern`. The default is the first number after the agent prefix: `cursor/42-slug` and `cursor/42-a1-slug` both give 42.
-4. The newest commit message, matched by `#<number>`.
+4. The newest commit message, matched by `#<number>`. Only when the branch has commits of its own (commits not in its base, unpushed commits, or a detached commit on no branch). An untouched branch's newest commit is a base commit, often a squash or merge message such as `Title (#21)` or `Merge pull request #5`, and using it would link the branch to an unrelated PR number and hide the Orphan flag. (Revised after review.)
 
 **Attempt IDs:** the attempt ID is `a<N>` right after the issue number in the branch name (`cursor/42-a1-slug`). Branches without one count as having no attempt ID.
 

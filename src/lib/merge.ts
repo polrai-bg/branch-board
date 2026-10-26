@@ -133,6 +133,14 @@ function commitsNotInBase(b: StatusInput): number | null {
   return ahead + (b.unpushed ?? 0);
 }
 
+// The tip commit belongs to this branch only if the branch has commits of its own. An untouched branch's tip is a
+// base commit, whose message ("Title (#21)", "Merge pull request #5") must not link the branch to an issue.
+export function hasOwnCommits(b: StatusInput): boolean {
+  if (b.detached) return Boolean(b.offBranch);
+  const ahead = commitsNotInBase(b);
+  return ahead != null && ahead > 0;
+}
+
 // First match wins. Zero-ahead with no PR at all is Empty, not Merged: an untouched agent branch and a branch
 // fast-forward merged by hand look identical by commit count, and the first is far more common. Zero-ahead with a PR is Merged.
 export function statusOf(b: StatusInput): Status {
@@ -165,7 +173,7 @@ export function sameRepo(owner: string, repo: string, nameWithOwner: string): bo
 }
 
 // First source that yields a positive issue number wins.
-export function linkIssue(cfg: Config, item: Pick<RemoteBranch, "repo" | "name" | "message" | "prs">): number | null {
+export function linkIssue(cfg: Config, item: Pick<RemoteBranch, "repo" | "name" | "message" | "prs"> & StatusInput): number | null {
   const override = cfg.branchOverrides.find(
     (o) => o.repo === item.repo && o.branch === item.name && typeof o.issue === "number" && o.issue > 0,
   );
@@ -182,6 +190,7 @@ export function linkIssue(cfg: Config, item: Pick<RemoteBranch, "repo" | "name" 
   const fromName = patternFor(cfg.issuePattern).exec(item.name);
   if (fromName?.[1] && /^\d+$/.test(fromName[1])) return Number(fromName[1]);
 
+  if (!hasOwnCommits(item)) return null;
   const fromMessage = /#(\d+)/.exec(item.message);
   return fromMessage ? Number(fromMessage[1]) : null;
 }
