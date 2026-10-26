@@ -18,6 +18,13 @@ export type WorktreeInfo = { path: string; sha: string; branch: string | null; d
 const FIELD = "\x1f";
 const REF_FORMAT = `%(refname:short)${FIELD}%(objectname)${FIELD}%(upstream:short)${FIELD}%(committerdate:iso-strict)${FIELD}%(authorname)${FIELD}%(subject)`;
 
+// The board's GitHub token must not reach git. A gh credential helper prefers GITHUB_TOKEN and GH_TOKEN over the
+// user's login, so git would fetch with the board's read-only token instead of the user's own credentials.
+export function gitEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const { GITHUB_TOKEN: _github, GH_TOKEN: _gh, ...rest } = env;
+  return { ...rest, GIT_TERMINAL_PROMPT: "0" };
+}
+
 export function defaultGit(): GitRunner {
   return (args, cwd, timeout = GIT_COMMAND_TIMEOUT_MS) =>
     new Promise((resolve) => {
@@ -29,7 +36,7 @@ export function defaultGit(): GitRunner {
           timeout,
           encoding: "utf8",
           maxBuffer: 20 * 1024 * 1024,
-          env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+          env: gitEnv(),
         },
         (err, stdout, stderr) => {
           const error = err as (NodeJS.ErrnoException & { killed?: boolean }) | null;

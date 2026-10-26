@@ -6,7 +6,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildRows, type RemoteBranch } from "../src/lib/merge.ts";
-import { collectLocal, liveWorktrees, parseWorktrees, type GitRunner } from "../src/lib/local.ts";
+import { collectLocal, gitEnv, liveWorktrees, parseWorktrees, type GitRunner } from "../src/lib/local.ts";
 import type { Config } from "../src/lib/config.ts";
 
 const env = {
@@ -169,4 +169,13 @@ test("local git: never pushed, dirty, detached, and unpushed", async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("git never sees the board's GitHub token", () => {
+  const env = gitEnv({ PATH: "/usr/bin", HOME: "/home/demo", GITHUB_TOKEN: "board-token", GH_TOKEN: "other-token" } as unknown as NodeJS.ProcessEnv);
+  assert.equal(env.GITHUB_TOKEN, undefined);
+  assert.equal(env.GH_TOKEN, undefined);
+  assert.equal(env.PATH, "/usr/bin");
+  assert.equal(env.HOME, "/home/demo");
+  assert.equal(env.GIT_TERMINAL_PROMPT, "0");
 });
