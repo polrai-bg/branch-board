@@ -16,10 +16,13 @@
     { "prefix": "grok-build/", "agent": "Grok Build" },
     { "prefix": "copilot/", "agent": "Copilot" }
   ],
+  "exemptPrefixes": ["grok-bot-sync-"],
+  "issuePattern": "^(?:[^/]+/)?(\\d+)-",
   "branchOverrides": [
-    { "repo": "repo-one", "branch": "some-branch", "agent": "Me", "ignore": false }
+    { "repo": "repo-one", "branch": "some-branch", "agent": "Me", "issue": 12, "ignore": false }
   ],
   "refreshMinutes": 2,
   "staleDays": 7,
+  "stalledReviewDays": 3,
   "hideMergedByDefault": true
 }

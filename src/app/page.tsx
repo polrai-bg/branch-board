@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Row, Status } from "@/lib/merge.ts";
-import { STATUS_ORDER } from "@/lib/merge.ts";
+import type { Flag, Row, Status } from "@/lib/merge.ts";
+import { FLAG_ORDER, STATUS_ORDER, UNFINISHED_STATUSES, summaryCounts } from "@/lib/merge.ts";
 
 type Data = {
   owner: string;
@@ -12,14 +12,27 @@ type Data = {
   rows: Row[];
 };
 
-const CHIP: Record<Status | "Stale", string> = {
+const STATUS_CHIP: Record<Status, string> = {
   Conflicts: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300",
+  Unsaved: "bg-amber-200 text-amber-950 dark:bg-amber-900 dark:text-amber-100",
+  Unpushed: "bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300",
+  "Local only": "bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300",
   WIP: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
-  Stale: "bg-orange-200 text-orange-900 dark:bg-orange-900 dark:text-orange-200",
   "Open PR": "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300",
   Empty: "bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
   Merged: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
 };
+
+const FLAG_CHIP: Record<Flag | "Unfinished local", string> = {
+  Orphan: "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300",
+  Overlap: "bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-950 dark:text-fuchsia-300",
+  "Stalled review": "bg-yellow-100 text-yellow-900 dark:bg-yellow-950 dark:text-yellow-200",
+  "Unfinished local": "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300",
+  Stale: "bg-orange-200 text-orange-900 dark:bg-orange-900 dark:text-orange-200",
+  "Issue closed": "bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300",
+};
+
+const SUMMARY = ["Orphan", "Overlap", "Stalled review", "Unfinished local", "Stale", "Issue closed", ...STATUS_ORDER] as const;
 
 function ago(iso: string | null) {
   if (!iso) return "never";
@@ -29,6 +42,23 @@ function ago(iso: string | null) {
 
 const days = (d: number) => (d <= 0 ? "today" : d === 1 ? "1 day" : `${d} days`);
 
+function displayPath(path: string) {
+  const home = /^\/Users\/[^/]+/.exec(path);
+  return home ? `~${path.slice(home[0].length)}` : path;
+}
+
+function branchLabel(row: Row) {
+  if (!row.detached) return row.name;
+  const path = row.localPath ?? row.name;
+  return path.split("/").filter(Boolean).pop() || path;
+}
+
+function matchesFlag(row: Row, flag: string) {
+  if (!flag) return true;
+  if (flag === "Unfinished local") return UNFINISHED_STATUSES.includes(row.status);
+  return row.flags.includes(flag as Flag);
+}
+
 export default function Board() {
   const [data, setData] = useState<Data | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -36,6 +66,7 @@ export default function Board() {
   const [repo, setRepo] = useState("");
   const [agent, setAgent] = useState("");
   const [status, setStatus] = useState("");
+  const [flag, setFlag] = useState("");
   const [search, setSearch] = useState("");
   const [hideMerged, setHideMerged] = useState<boolean | null>(null);
 
@@ -43,60 +74,80 @@ export default function Board() {
     try {
       const res = await fetch("/api/branches", { cache: "no-store" });
       if (!res.ok) throw new Error(`/api/branches returned ${res.status}`);
-      const d: Data = await res.json();
-      setData(d);
-      setHideMerged((h) => h ?? d.hideMergedByDefault);
+      const next: Data = await res.json();
+      setData(next);
+      setHideMerged((current) => current ?? next.hideMergedByDefault);
       setLoadError(null);
-    } catch (e) {
-      setLoadError((e as Error).message);
+    } catch (error) {
+      setLoadError((error as Error).message);
     }
   }, []);
 
-  useEffect(() => {
-    load();
-    const t = setInterval(load, 30_000);
-    return () => clearInterval(t);
-  }, [load]);
-
-  async function refreshNow() {
+  const refreshNow = useCallback(async () => {
     setBusy(true);
     try {
-      await fetch("/api/refresh", { method: "POST" });
+      const res = await fetch("/api/refresh", { method: "POST" });
+      if (!res.ok) throw new Error(`Refresh failed (${res.status})`);
       await load();
+    } catch (error) {
+      setLoadError((error as Error).message);
     } finally {
       setBusy(false);
     }
-  }
+  }, [load]);
+
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      await load();
+      if (!cancel) await refreshNow();
+    })();
+    const timer = setInterval(() => void load(), 30_000);
+    return () => {
+      cancel = true;
+      clearInterval(timer);
+    };
+  }, [load, refreshNow]);
 
   const rows = data?.rows ?? [];
-  const repos = useMemo(() => [...new Set(rows.map((r) => r.repo))].sort(), [rows]);
-  const agents = useMemo(() => [...new Set(rows.map((r) => r.agent))].sort(), [rows]);
-  const counts = useMemo(() => {
-    const c: Record<string, number> = { Stale: rows.filter((r) => r.stale).length };
-    for (const s of STATUS_ORDER) c[s] = rows.filter((r) => r.status === s).length;
-    return c;
-  }, [rows]);
-
+  const repos = useMemo(() => [...new Set(rows.map((row) => row.repo))].sort(), [rows]);
+  const agents = useMemo(() => [...new Set(rows.map((row) => row.agent))].sort(), [rows]);
+  const counts = useMemo(() => summaryCounts(rows), [rows]);
   const visible = rows.filter(
-    (r) =>
-      (!repo || r.repo === repo) &&
-      (!agent || r.agent === agent) &&
-      (status === "Stale" ? r.stale : !status || r.status === status) &&
-      (!search || r.name.toLowerCase().includes(search.toLowerCase())) &&
-      (!hideMerged || status === "Merged" || r.status !== "Merged"),
+    (row) =>
+      (!repo || row.repo === repo) &&
+      (!agent || row.agent === agent) &&
+      (!status || row.status === status) &&
+      matchesFlag(row, flag) &&
+      (!search || row.name.toLowerCase().includes(search.toLowerCase()) || (row.localPath?.toLowerCase().includes(search.toLowerCase()) ?? false)) &&
+      (!hideMerged || status === "Merged" || row.status !== "Merged"),
   );
 
   const errors = [...(data?.errors ?? []), ...(loadError ? [{ message: loadError }] : [])];
   const gh = `https://github.com/${data?.owner}`;
   const select = "rounded border border-zinc-300 bg-transparent px-2 py-1 dark:border-zinc-700";
 
+  function chipClass(name: string) {
+    if (name in FLAG_CHIP) return FLAG_CHIP[name as Flag | "Unfinished local"];
+    return STATUS_CHIP[name as Status];
+  }
+
+  function chipSelected(name: string) {
+    return name === "Unfinished local" || (FLAG_ORDER as readonly string[]).includes(name) ? flag === name : status === name;
+  }
+
+  function toggleChip(name: string) {
+    if (name === "Unfinished local" || (FLAG_ORDER as readonly string[]).includes(name)) setFlag(flag === name ? "" : name);
+    else setStatus(status === name ? "" : name);
+  }
+
   return (
-    <main className="mx-auto max-w-[1400px] px-4 py-6 text-sm">
+    <main className="mx-auto max-w-[1600px] px-4 py-6 text-sm">
       <header className="flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-semibold">Branch Board</h1>
         <span className="text-zinc-500">last refreshed {ago(data?.takenAt ?? null)}</span>
         <button
-          onClick={refreshNow}
+          onClick={() => void refreshNow()}
           disabled={busy}
           className="ml-auto rounded bg-zinc-900 px-3 py-1.5 font-medium text-white disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900"
         >
@@ -106,10 +157,10 @@ export default function Board() {
 
       {errors.length > 0 && (
         <div role="alert" className="mt-3 rounded border border-red-300 bg-red-50 px-3 py-2 text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
-          {errors.map((e, i) => (
-            <div key={i}>
-              {e.message}
-              {e.setup && <span> See the Setup section of README.md.</span>}
+          {errors.map((error, index) => (
+            <div key={index}>
+              {error.message}
+              {error.setup && <span> See the Setup section of README.md.</span>}
             </div>
           ))}
           {data && <div className="mt-1 text-xs opacity-80">Showing the last good data.</div>}
@@ -117,45 +168,45 @@ export default function Board() {
       )}
 
       <div className="mt-4 flex flex-wrap gap-2">
-        {(["Conflicts", "WIP", "Stale", "Open PR", "Empty", "Merged"] as const).map((s) => (
+        {SUMMARY.map((name) => (
           <button
-            key={s}
-            onClick={() => setStatus(status === s ? "" : s)}
-            className={`rounded-full px-3 py-1 font-medium ${CHIP[s]} ${status === s ? "ring-2 ring-zinc-500" : ""}`}
+            key={name}
+            onClick={() => toggleChip(name)}
+            className={`rounded-full px-3 py-1 font-medium ${chipClass(name)} ${chipSelected(name) ? "ring-2 ring-zinc-500" : ""}`}
           >
-            {s} {counts[s] ?? 0}
+            {name} {counts[name] ?? 0}
           </button>
         ))}
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <select aria-label="Repo" value={repo} onChange={(e) => setRepo(e.target.value)} className={select}>
+        <select aria-label="Repo" value={repo} onChange={(event) => setRepo(event.target.value)} className={select}>
           <option value="">All repos</option>
-          {repos.map((r) => (
-            <option key={r}>{r}</option>
+          {repos.map((name) => (
+            <option key={name}>{name}</option>
           ))}
         </select>
-        <select aria-label="Agent" value={agent} onChange={(e) => setAgent(e.target.value)} className={select}>
+        <select aria-label="Agent" value={agent} onChange={(event) => setAgent(event.target.value)} className={select}>
           <option value="">All agents</option>
-          {agents.map((a) => (
-            <option key={a}>{a}</option>
+          {agents.map((name) => (
+            <option key={name}>{name}</option>
           ))}
         </select>
-        <select aria-label="Status" value={status} onChange={(e) => setStatus(e.target.value)} className={select}>
+        <select aria-label="Status" value={status} onChange={(event) => setStatus(event.target.value)} className={select}>
           <option value="">All statuses</option>
-          {[...STATUS_ORDER, "Stale"].map((s) => (
-            <option key={s}>{s}</option>
+          {STATUS_ORDER.map((name) => (
+            <option key={name}>{name}</option>
           ))}
         </select>
-        <input
-          type="search"
-          placeholder="Search branch name"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className={`${select} w-56`}
-        />
+        <select aria-label="Flag" value={flag} onChange={(event) => setFlag(event.target.value)} className={select}>
+          <option value="">All flags</option>
+          {[...FLAG_ORDER, "Unfinished local"].map((name) => (
+            <option key={name}>{name}</option>
+          ))}
+        </select>
+        <input type="search" placeholder="Search branch name" value={search} onChange={(event) => setSearch(event.target.value)} className={`${select} w-56`} />
         <label className="flex items-center gap-1.5">
-          <input type="checkbox" checked={!!hideMerged} onChange={(e) => setHideMerged(e.target.checked)} />
+          <input type="checkbox" checked={!!hideMerged} onChange={(event) => setHideMerged(event.target.checked)} />
           Hide merged
         </label>
         <span className="ml-auto text-zinc-500">
@@ -167,40 +218,70 @@ export default function Board() {
         <table className="w-full border-collapse text-left">
           <thead className="border-b border-zinc-300 text-xs uppercase text-zinc-500 dark:border-zinc-700">
             <tr>
-              {["Repo", "Branch", "Agent", "Status", "Base", "Ahead", "Behind", "Last commit", "PR"].map((h) => (
-                <th key={h} className="px-2 py-2 font-medium">
-                  {h}
+              {["Repo", "Branch", "Issue", "Agent", "Status", "Flags", "Base", "Ahead", "Behind", "Last commit", "Where", "PR", "Local path"].map((heading) => (
+                <th key={heading} className="px-2 py-2 font-medium">
+                  {heading}
                 </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {visible.map((r) => (
-              <tr key={`${r.repo}/${r.name}`} className="border-b border-zinc-100 dark:border-zinc-900">
-                <td className="px-2 py-1.5 text-zinc-500">{r.repo}</td>
+            {visible.map((row) => (
+              <tr key={`${row.repo}/${row.name}`} className="border-b border-zinc-100 dark:border-zinc-900">
+                <td className="px-2 py-1.5 text-zinc-500">{row.repo}</td>
                 <td className="px-2 py-1.5 font-mono text-xs">
-                  <a className="hover:underline" href={`${gh}/${r.repo}/tree/${encodeURI(r.name)}`} target="_blank" rel="noreferrer">
-                    {r.name}
-                  </a>
-                </td>
-                <td className="px-2 py-1.5">{r.agent}</td>
-                <td className="px-2 py-1.5 whitespace-nowrap">
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${CHIP[r.status]}`}>{r.status}</span>
-                  {r.stale && <span className={`ml-1 rounded-full px-2 py-0.5 text-xs font-medium ${CHIP.Stale}`}>Stale</span>}
-                </td>
-                <td className="px-2 py-1.5 font-mono text-xs">
-                  {r.compare?.base ?? "?"}
-                  {r.baseGuessed && r.compare && <span className="ml-1 font-sans text-zinc-400" title="No PR: base guessed by merge base">guessed</span>}
-                </td>
-                <td className="px-2 py-1.5 tabular-nums">{r.compare?.ahead ?? ""}</td>
-                <td className="px-2 py-1.5 tabular-nums">{r.compare?.behind ?? ""}</td>
-                <td className="px-2 py-1.5 whitespace-nowrap" title={r.committedDate}>
-                  {days(r.daysAgo)}
+                  {row.where === "Local" ? (
+                    <span title={row.detached ? row.localPath ?? undefined : undefined}>{branchLabel(row)}</span>
+                  ) : (
+                    <a className="hover:underline" href={`${gh}/${row.repo}/tree/${encodeURI(row.name)}`} target="_blank" rel="noreferrer">
+                      {row.name}
+                    </a>
+                  )}
+                  {row.attempt && <span className="ml-1 font-sans text-zinc-400">{row.attempt}</span>}
                 </td>
                 <td className="px-2 py-1.5">
-                  {r.pr && (
-                    <a className="text-blue-600 hover:underline dark:text-blue-400" href={r.pr.url} target="_blank" rel="noreferrer">
-                      #{r.pr.number}
+                  {row.issue && (
+                    <a className="text-blue-600 hover:underline dark:text-blue-400" title={row.issue.title ?? undefined} href={`${gh}/${row.repo}/issues/${row.issue.number}`} target="_blank" rel="noreferrer">
+                      #{row.issue.number}
+                    </a>
+                  )}
+                </td>
+                <td className="px-2 py-1.5">{row.agent}</td>
+                <td className="px-2 py-1.5 whitespace-nowrap">
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_CHIP[row.status]}`}>{row.status}</span>
+                </td>
+                <td className="px-2 py-1.5 whitespace-nowrap">
+                  {row.flags.map((name) => (
+                    <span key={name} className={`mr-1 rounded-full px-2 py-0.5 text-xs font-medium ${FLAG_CHIP[name]}`}>
+                      {name}
+                    </span>
+                  ))}
+                </td>
+                <td className="px-2 py-1.5 font-mono text-xs">
+                  {row.compare?.base ?? ""}
+                  {row.baseGuessed && row.compare && (
+                    <span className="ml-1 font-sans text-zinc-400" title="No PR: base guessed by merge base">
+                      guessed
+                    </span>
+                  )}
+                </td>
+                <td className="px-2 py-1.5 tabular-nums">{row.compare?.ahead ?? ""}</td>
+                <td className="px-2 py-1.5 tabular-nums">{row.compare?.behind ?? ""}</td>
+                <td className="px-2 py-1.5 whitespace-nowrap" title={row.committedDate}>
+                  {days(row.daysAgo)}
+                </td>
+                <td className="px-2 py-1.5">{row.where}</td>
+                <td className="px-2 py-1.5">
+                  {row.pr && (
+                    <a className="text-blue-600 hover:underline dark:text-blue-400" href={row.pr.url} target="_blank" rel="noreferrer">
+                      #{row.pr.number}
+                    </a>
+                  )}
+                </td>
+                <td className="px-2 py-1.5 font-mono text-xs">
+                  {row.localPath && (
+                    <a className="hover:underline" href={`file://${encodeURI(row.localPath)}`} title={row.localPath}>
+                      {displayPath(row.localPath)}
                     </a>
                   )}
                 </td>
