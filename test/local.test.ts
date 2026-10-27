@@ -171,6 +171,50 @@ test("local git: never pushed, dirty, detached, and unpushed", async () => {
   }
 });
 
+test("configured bases are collected and not compared", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bb-bases-"));
+  const calls: string[][] = [];
+  const row = (name: string) => [name, "abc", "", "2026-01-01T00:00:00Z", "Test", "init"].join("\x1f");
+  const gitRunner: GitRunner = async (args) => {
+    calls.push(args);
+    if (args[0] === "fetch") return { code: 0, stdout: "", stderr: "", timedOut: false };
+    if (args[0] === "for-each-ref" && args.at(-1) === "refs/heads") {
+      return { code: 0, stdout: `${row("main")}\n${row("development")}\n${row("feature-x")}\n`, stderr: "", timedOut: false };
+    }
+    if (args[0] === "rev-list" && args[1] === "--left-right") return { code: 0, stdout: "0\t4\n", stderr: "", timedOut: false };
+    if (args[0] === "merge-base") return { code: 0, stdout: "abc\n", stderr: "", timedOut: false };
+    if (args[0] === "rev-parse" && String(args.at(-1)).startsWith("refs/remotes/")) return { code: 1, stdout: "", stderr: "", timedOut: false };
+    if (args[0] === "rev-parse") return { code: 0, stdout: "abc\n", stderr: "", timedOut: false };
+    if (args[0] === "worktree") return { code: 0, stdout: "", stderr: "", timedOut: false };
+    if (args[0] === "log") return { code: 0, stdout: "init\n", stderr: "", timedOut: false };
+    return { code: 0, stdout: "", stderr: "", timedOut: false };
+  };
+  try {
+    const scan = await collectLocal("demo-repo", dir, ["main", "development"], gitRunner);
+    const main = scan.records.find((record) => record.name === "main");
+    const development = scan.records.find((record) => record.name === "development");
+    const feature = scan.records.find((record) => record.name === "feature-x");
+    assert.equal(main?.compare, null);
+    assert.equal(development?.compare, null);
+    assert.equal(main?.baseGuessed, false);
+    assert.equal(development?.baseGuessed, false);
+    assert.equal(feature?.compare?.ahead, 4);
+    assert.equal(feature?.baseGuessed, true);
+    const heads = calls
+      .filter((args) => args[0] === "rev-list" && args[1] === "--left-right")
+      .map((args) => args.find((arg) => arg.includes("..."))?.split("...")[1]);
+    assert.equal(heads.includes("refs/heads/main"), false);
+    assert.equal(heads.includes("refs/heads/development"), false);
+    const rows = buildRows(cfg, [], Date.parse("2026-10-25T00:00:00Z"), scan.records, []);
+    assert.equal(rows.find((row) => row.name === "main")?.status, "Base");
+    assert.deepEqual(rows.find((row) => row.name === "main")?.flags, []);
+    assert.equal(rows.find((row) => row.name === "main")?.compare, null);
+    assert.notEqual(rows.find((row) => row.name === "development")?.status, "Base");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("git never sees the board's GitHub token", () => {
   const env = gitEnv({ PATH: "/usr/bin", HOME: "/home/demo", GITHUB_TOKEN: "board-token", GH_TOKEN: "other-token" } as unknown as NodeJS.ProcessEnv);
   assert.equal(env.GITHUB_TOKEN, undefined);

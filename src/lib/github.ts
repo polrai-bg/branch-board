@@ -184,20 +184,27 @@ export async function collectRepo(token: string, owner: string, repo: string, ba
   // ponytail: compares for a repo fire at once; fine at a few dozen branches.
   const branches = await Promise.all(
     nodes
-      .filter((node) => node.target?.oid && !bases.includes(node.name))
+      .filter((node) => node.target?.oid)
       .map(async (node): Promise<RemoteBranch> => {
         const prs = (node.associatedPullRequests?.nodes ?? []).filter(Boolean).map(mapPR);
-        const pr = pickPR(prs);
-        const candidates = pr ? [pr.baseRefName] : existingBases;
-        const comparisons = (
-          await Promise.all(
-            candidates.map((base) =>
-              compare(fetchImpl, token, owner, repo, base, node.name).catch((error) =>
-                error instanceof GitHubError && [404, 422].includes(error.status) ? null : Promise.reject(error),
+        const isBase = bases.includes(node.name);
+        let chosen: Comparison | null = null;
+        let baseGuessed = false;
+        if (!isBase) {
+          const pr = pickPR(prs);
+          const candidates = pr ? [pr.baseRefName] : existingBases;
+          const comparisons = (
+            await Promise.all(
+              candidates.map((base) =>
+                compare(fetchImpl, token, owner, repo, base, node.name).catch((error) =>
+                  error instanceof GitHubError && [404, 422].includes(error.status) ? null : Promise.reject(error),
+                ),
               ),
-            ),
-          )
-        ).filter((item): item is Comparison => item !== null);
+            )
+          ).filter((item): item is Comparison => item !== null);
+          chosen = pickBase(comparisons);
+          baseGuessed = !pr;
+        }
         return {
           repo,
           name: node.name,
@@ -207,8 +214,8 @@ export async function collectRepo(token: string, owner: string, repo: string, ba
           authorLogin: node.target!.author?.user?.login ?? null,
           authorName: node.target!.author?.name ?? null,
           prs,
-          compare: pickBase(comparisons),
-          baseGuessed: !pr,
+          compare: chosen,
+          baseGuessed,
         };
       }),
   );

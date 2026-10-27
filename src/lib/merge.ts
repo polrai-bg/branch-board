@@ -55,15 +55,21 @@ export type IssueLink = { number: number; title: string | null; state: "OPEN" | 
 
 export type Where = "GitHub" | "Local" | "Both";
 
-export type Status = "Conflicts" | "Unsaved" | "Unpushed" | "Local only" | "WIP" | "Open PR" | "Empty" | "Merged";
+export type Status = "Conflicts" | "Unsaved" | "Unpushed" | "Local only" | "WIP" | "Open PR" | "Empty" | "Merged" | "Base";
 
-export const STATUS_ORDER: Status[] = ["Conflicts", "Unsaved", "Unpushed", "Local only", "WIP", "Open PR", "Empty", "Merged"];
+export const STATUS_ORDER: Status[] = ["Conflicts", "Unsaved", "Unpushed", "Local only", "WIP", "Open PR", "Empty", "Merged", "Base"];
 
 export const FLAG_ORDER = ["Orphan", "Overlap", "Stalled review", "Stale", "Issue closed"] as const;
 
 export type Flag = (typeof FLAG_ORDER)[number];
 
-export const UNFINISHED_STATUSES: readonly Status[] = ["Unsaved", "Unpushed", "Local only"];
+const UNFINISHED_LIST = ["Unsaved", "Unpushed", "Local only"] as const satisfies readonly Status[];
+
+export const UNFINISHED_STATUSES: readonly Status[] = UNFINISHED_LIST;
+
+function isUnfinished(status: Status): status is (typeof UNFINISHED_LIST)[number] {
+  return (UNFINISHED_LIST as readonly Status[]).includes(status);
+}
 
 // Metrics stored once per day. Chip totals are the sum across repos.
 export const COUNT_METRICS = ["Orphan", "Overlap", "Stalled review", "Stale", "Issue closed", "Unfinished local", "Empty"] as const;
@@ -280,7 +286,7 @@ function join(remotes: RemoteBranch[], locals: LocalRecord[]): Work[] {
 function overlapKeys(rows: { repo: string; status: Status; issue: IssueLink | null; attempt: string | null }[]): Set<string> {
   const groups = new Map<string, { attempt: string | null }[]>();
   for (const row of rows) {
-    if (row.status === "Merged" || !row.issue) continue;
+    if (row.status === "Merged" || row.status === "Base" || !row.issue) continue;
     const key = `${row.repo}#${row.issue.number}`;
     const list = groups.get(key) ?? [];
     list.push(row);
@@ -297,6 +303,7 @@ function overlapKeys(rows: { repo: string; status: Status; issue: IssueLink | nu
 }
 
 function flagsFor(cfg: Config, row: { name: string; status: Status; issue: IssueLink | null; daysAgo: number; committedDate: string; prs: PR[] }, overlap: boolean, now: number): Flag[] {
+  if (row.status === "Base") return [];
   const flags: Flag[] = [];
   const exempt = (cfg.exemptPrefixes ?? []).filter(Boolean).some((prefix) => row.name.startsWith(prefix));
   if (row.status !== "Merged" && !row.issue && !exempt) flags.push("Orphan");
@@ -310,17 +317,33 @@ function flagsFor(cfg: Config, row: { name: string; status: Status; issue: Issue
   return flags;
 }
 
+// One order for the sort and the page sections, so a section never splits.
+function placement(row: { status: Status; flags: readonly Flag[] }): { rank: number; section: string } {
+  if (row.status === "Conflicts") return { rank: 0, section: "Conflicts" };
+  if (isUnfinished(row.status)) return { rank: 1, section: "On this Mac" };
+  if (row.flags.includes("Overlap")) return { rank: 2, section: "Overlapping" };
+  if (row.flags.includes("Orphan")) return { rank: 3, section: "No issue" };
+  if (row.flags.includes("Stalled review")) return { rank: 4, section: "Stalled" };
+  if (row.flags.includes("Stale")) return { rank: 5, section: "Stale" };
+  if (row.status === "WIP") return { rank: 6, section: "In progress" };
+  if (row.status === "Open PR") return { rank: 7, section: "In review" };
+  if (row.status === "Empty") return { rank: 8, section: "Empty" };
+  if (row.status === "Merged") return { rank: 9, section: "Merged" };
+  if (row.status === "Base") return { rank: 10, section: "Bases" };
+  const unreachable: never = row.status;
+  return unreachable;
+}
+
 function actionRank(row: Row): number {
-  if (row.status === "Conflicts") return 0;
-  if (UNFINISHED_STATUSES.includes(row.status)) return 1;
-  if (row.flags.includes("Overlap")) return 2;
-  if (row.flags.includes("Orphan")) return 3;
-  if (row.flags.includes("Stalled review")) return 4;
-  if (row.flags.includes("Stale")) return 5;
-  if (row.status === "WIP") return 6;
-  if (row.status === "Open PR") return 7;
-  if (row.status === "Empty") return 8;
-  return 9;
+  return placement(row).rank;
+}
+
+export function sectionOf(row: { status: Status; flags: readonly Flag[] }): string {
+  return placement(row).section;
+}
+
+function isConfiguredBase(cfg: Config, repo: string, name: string): boolean {
+  return cfg.repos.some((item) => item.name === repo && item.bases.includes(name));
 }
 
 export function buildRows(cfg: Config, remotes: RemoteBranch[], now = Date.now(), locals: LocalRecord[] = [], issues: IssueInfo[] = []): Row[] {
@@ -328,15 +351,18 @@ export function buildRows(cfg: Config, remotes: RemoteBranch[], now = Date.now()
   const draft = join(remotes, locals)
     .filter((item) => !cfg.branchOverrides.some((o) => o.repo === item.repo && o.branch === item.name && o.ignore))
     .map((item) => {
-      const parsed = Date.parse(item.committedDate);
+      // A configured base is the trunk, not unfinished work. statusOf would mark it Empty or Local only.
+      const isBase = isConfiguredBase(cfg, item.repo, item.name);
+      const source = isBase ? { ...item, compare: null, baseGuessed: false } : item;
+      const parsed = Date.parse(source.committedDate);
       const daysAgo = Number.isNaN(parsed) ? 0 : Math.floor((now - parsed) / 86_400_000);
-      const number = linkIssue(cfg, item);
-      const hit = number == null ? undefined : known.get(`${item.repo}#${number}`);
+      const number = linkIssue(cfg, source);
+      const hit = number == null ? undefined : known.get(`${source.repo}#${number}`);
       const issue: IssueLink | null = number == null ? null : { number, title: hit?.title ?? null, state: hit?.state ?? null };
-      const status = statusOf(item);
+      const status = isBase ? "Base" : statusOf(source);
       return {
-        ...item,
-        agent: detectAgent(cfg, item),
+        ...source,
+        agent: detectAgent(cfg, source),
         status,
         stale: status === "WIP" && daysAgo >= cfg.staleDays,
         pr: pickPR(item.prs),

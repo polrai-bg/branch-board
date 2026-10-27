@@ -6,7 +6,7 @@ export const metadata: Metadata = { title: "Branch Board" };
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="bg-white text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100">{children}</body>
+      <body>{children}</body>
     </html>
   );
 }

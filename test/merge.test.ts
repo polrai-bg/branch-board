@@ -9,8 +9,11 @@ import {
   detectAgent,
   linkIssue,
   pickBase,
+  sectionOf,
+  STATUS_ORDER,
   statusOf,
   summaryCounts,
+  UNFINISHED_STATUSES,
   type IssueInfo,
   type LocalRecord,
   type PR,
@@ -264,4 +267,95 @@ test("buildRows: ignore, stale flag, and action sort", () => {
   assert.equal(rows.find((row) => row.name === "old-wip")?.stale, true);
   assert.equal(rows.find((row) => row.name === "fresh-wip")?.stale, false);
   assert.equal(rows.find((row) => row.name === "conflicted")?.where, "GitHub");
+});
+
+test("a configured base is Base, has no flags, and sorts after Merged", () => {
+  const mixed: Config = {
+    ...cfg,
+    repos: [
+      { name: "demo-repo", localPath: null, bases: ["main", "development"] },
+      { name: "side-repo", localPath: null, bases: ["main"] },
+    ],
+  };
+  const rows = buildRows(
+    mixed,
+    [
+      branch({ name: "merged-one", prs: [pr("MERGED")] }),
+      branch({
+        name: "main",
+        message: "Add consent banner (#21)",
+        prs: [pr("MERGED")],
+        compare: { base: "main", ahead: 0, behind: 0, mergeBase: "abc" },
+        baseGuessed: true,
+      }),
+      branch({ name: "development", message: "Merge pull request #5" }),
+      branch({ name: "feature-x", message: "fix #3" }),
+      branch({ repo: "side-repo", name: "development", ahead: 0, message: "Title (#21)" }),
+      branch({ repo: "side-repo", name: "main", ahead: 0, message: "init (#4)" }),
+    ],
+    NOW,
+    [
+      local({
+        name: "main",
+        dirty: true,
+        neverPushed: true,
+        localPath: "/tmp/demo-main",
+        compare: { base: "development", ahead: 3, behind: 1, mergeBase: "m" },
+        baseGuessed: true,
+      }),
+    ],
+    [
+      { repo: "demo-repo", number: 3, title: "Three", state: "OPEN" },
+      { repo: "demo-repo", number: 21, title: "Consent", state: "CLOSED" },
+    ],
+  );
+
+  const main = rows.find((row) => row.repo === "demo-repo" && row.name === "main");
+  assert.ok(main);
+  assert.equal(main.status, "Base");
+  assert.deepEqual(main.flags, []);
+  assert.equal(main.compare, null);
+  assert.equal(main.baseGuessed, false);
+  assert.equal(main.where, "Both");
+  assert.equal(main.localPath, "/tmp/demo-main");
+  assert.equal(main.pr?.state, "MERGED");
+  assert.equal(main.issue, null);
+  assert.equal(sectionOf(main), "Bases");
+  assert.equal(UNFINISHED_STATUSES.includes(main.status), false);
+
+  const development = rows.find((row) => row.repo === "demo-repo" && row.name === "development");
+  assert.equal(development?.status, "Base");
+  assert.deepEqual(development?.flags, []);
+  assert.equal(development?.compare, null);
+  assert.equal(development?.baseGuessed, false);
+  assert.equal(sectionOf(development!), "Bases");
+
+  const sideMain = rows.find((row) => row.repo === "side-repo" && row.name === "main");
+  assert.equal(sideMain?.status, "Base");
+  assert.deepEqual(sideMain?.flags, []);
+  assert.equal(sectionOf(sideMain!), "Bases");
+
+  const sideDevelopment = rows.find((row) => row.repo === "side-repo" && row.name === "development");
+  assert.equal(sideDevelopment?.status, "Empty", "a branch is Base only when its own repo lists that name");
+  assert.ok(sideDevelopment?.flags.includes("Orphan"));
+  assert.equal(sectionOf(sideDevelopment!), "No issue");
+
+  const demo = rows.filter((row) => row.repo === "demo-repo").map((row) => row.name);
+  assert.deepEqual(demo, ["feature-x", "merged-one", "development", "main"]);
+  assert.ok(demo.indexOf("merged-one") < demo.indexOf("development"));
+  assert.ok(demo.indexOf("merged-one") < demo.indexOf("main"));
+  assert.equal(STATUS_ORDER.at(-1), "Base");
+
+  const localOnly = buildRows(
+    cfg,
+    [],
+    NOW,
+    [local({ name: "main", dirty: true, neverPushed: true, compare: { base: "main", ahead: 0, behind: 0, mergeBase: "m" }, baseGuessed: true })],
+  );
+  assert.equal(localOnly[0]?.status, "Base");
+  assert.equal(localOnly[0]?.where, "Local");
+  assert.equal(localOnly[0]?.compare, null);
+  assert.equal(localOnly[0]?.baseGuessed, false);
+  assert.deepEqual(localOnly[0]?.flags, []);
+  assert.equal(sectionOf(localOnly[0]!), "Bases");
 });
