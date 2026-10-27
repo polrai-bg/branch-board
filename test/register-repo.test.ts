@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rememberScan, selectableScanPaths } from "../src/lib/scan-session.ts";
-import { basesFromRefNames, decideRepoEntry, githubRepoFromOrigin, registerFolder, registerFolders, scanWorkFolder } from "../src/lib/register-repo.ts";
+import { basesFromRefNames, decideRepoEntry, githubRepoFromOrigin, registerFolder, registerFolders, removeRepos, scanWorkFolder } from "../src/lib/register-repo.ts";
 
 const env = {
   ...process.env,
@@ -293,6 +293,29 @@ test("bulk add appends only the checked repos and does not duplicate", async () 
     assert.equal(again.added.length, 0);
     assert.equal(again.skipped.length, 3);
     assert.equal(await readFile(configPath, "utf8"), snapshot);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("removeRepos drops a named repo and keeps the rest of the file", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bb-remove-"));
+  const configPath = join(dir, "branchboard.config.json");
+  try {
+    const original = configText([
+      { name: "alpha", localPath: "/tmp/alpha", bases: ["main"] },
+      { name: "beta", localPath: "/tmp/beta", bases: ["main", "development"] },
+    ]);
+    await writeFile(configPath, original);
+    const gone = removeRepos(["beta"], configPath);
+    assert.equal(gone.ok, true);
+    const after = JSON.parse(await readFile(configPath, "utf8")) as { github: { note: string }; repos: { name: string }[]; zoom: boolean };
+    assert.deepEqual(after.repos.map((repo) => repo.name), ["alpha"]);
+    assert.equal(after.github.note, "keep");
+    assert.equal(after.zoom, true);
+    const last = removeRepos(["alpha"], configPath);
+    assert.equal(last.ok, false);
+    assert.deepEqual(JSON.parse(await readFile(configPath, "utf8")).repos.map((repo: { name: string }) => repo.name), ["alpha"]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

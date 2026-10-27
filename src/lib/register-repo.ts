@@ -270,6 +270,20 @@ export async function registerFolders(folders: string[], configPath: string): Pr
   return { ok: true, added, notices, skipped };
 }
 
+// Drop repos by name. Leaves every other config key alone. Refuses to remove the last repo.
+export function removeRepos(names: string[], configPath: string): { ok: true; removed: string[] } | { ok: false; error: string } {
+  const board = readBoard(configPath);
+  if (!board.ok) return board;
+  const drop = new Set(names.filter(Boolean));
+  const removed = board.repos.filter((repo) => drop.has(repo.name)).map((repo) => repo.name);
+  if (removed.length === 0) return { ok: false, error: "None of those repos are in the config." };
+  if (removed.length >= board.repos.length) return { ok: false, error: "Keep at least one repo." };
+  const raw = JSON.parse(board.text) as { repos: { name: string }[] };
+  raw.repos = raw.repos.filter((repo) => !drop.has(repo.name));
+  writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`);
+  return { ok: true, removed };
+}
+
 export async function registerFolder(folder: string, configPath: string): Promise<RepoDecision> {
   const result = await registerFolders([folder], configPath);
   if (!result.ok) return result;

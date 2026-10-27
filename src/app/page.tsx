@@ -86,6 +86,8 @@ export default function Board() {
   const [picking, setPicking] = useState<"add" | "scan" | null>(null);
   const [adding, setAdding] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [reposOpen, setReposOpen] = useState(false);
+  const [configured, setConfigured] = useState<{ name: string; localPath: string | null; bases: string[] }[]>([]);
   const [scanOpen, setScanOpen] = useState(false);
   const [hits, setHits] = useState<ScanHit[]>([]);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
@@ -117,6 +119,42 @@ export default function Board() {
     }
   }, [load]);
 
+  const loadConfigured = useCallback(async () => {
+    const res = await fetch("/api/repos", { cache: "no-store" });
+    const body = (await res.json()) as { repos?: { name: string; localPath: string | null; bases: string[] }[]; error?: string };
+    if (!res.ok) throw new Error(body.error || `Repos failed (${res.status})`);
+    setConfigured(body.repos ?? []);
+  }, []);
+
+  const showRepos = useCallback(async () => {
+    setReposOpen(true);
+    try {
+      await loadConfigured();
+    } catch (error) {
+      setLoadError((error as Error).message);
+    }
+  }, [loadConfigured]);
+
+  const removeRepo = useCallback(
+    async (name: string) => {
+      setNote(null);
+      try {
+        const res = await fetch("/api/repos", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (!res.ok) throw new Error(body?.error || `Remove failed (${res.status})`);
+        await loadConfigured();
+        await refreshNow();
+      } catch (error) {
+        setLoadError((error as Error).message);
+      }
+    },
+    [loadConfigured, refreshNow],
+  );
+
   const addFolder = useCallback(async () => {
     setPicking("add");
     setNote(null);
@@ -134,13 +172,14 @@ export default function Board() {
       }
       setPicking(null);
       await refreshNow();
+      await loadConfigured();
       if (typeof body?.notice === "string" && body.notice) setNote(body.notice);
     } catch (error) {
       setLoadError((error as Error).message);
     } finally {
       setPicking(null);
     }
-  }, [refreshNow]);
+  }, [loadConfigured, refreshNow]);
 
   const scanFolder = useCallback(async () => {
     setPicking("scan");
@@ -194,13 +233,14 @@ export default function Board() {
       setHits([]);
       setSelected(new Set());
       await refreshNow();
+      await loadConfigured();
       if (followup.length > 0) setNote(followup.join(" "));
     } catch (error) {
       setLoadError((error as Error).message);
     } finally {
       setAdding(false);
     }
-  }, [hits, refreshNow, selected]);
+  }, [hits, loadConfigured, refreshNow, selected]);
 
   useEffect(() => {
     let cancel = false;
@@ -254,6 +294,9 @@ export default function Board() {
           Hide merged
         </label>
         <div className="actions">
+          <button className="push" type="button" onClick={() => void showRepos()}>
+            Repos
+          </button>
           <button className="push" type="button" title="Add Folder" onClick={() => void addFolder()} disabled={locked}>
             {picking === "add" ? "Choosing…" : "Add…"}
           </button>
@@ -265,6 +308,38 @@ export default function Board() {
           </button>
         </div>
       </header>
+
+      {reposOpen && (
+        <section className="scan" aria-label="Configured repositories">
+          <ul className="scan-list">
+            {configured.map((item) => (
+              <li key={item.name} className="scan-row">
+                <div className="check">
+                  <span className="scan-name">{item.name}</span>
+                  <span className="scan-path" title={item.localPath ?? ""}>
+                    {item.localPath ? displayPath(item.localPath) : "No local folder"}
+                  </span>
+                  <span className="sub">{item.bases.join(", ")}</span>
+                  <button className="push" type="button" disabled={locked || configured.length < 2} onClick={() => void removeRepo(item.name)}>
+                    Remove
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <div className="scan-actions">
+            <button className="push" type="button" onClick={() => void addFolder()} disabled={locked}>
+              Add…
+            </button>
+            <button className="push" type="button" onClick={() => void scanFolder()} disabled={locked}>
+              Scan…
+            </button>
+            <button className="push" type="button" onClick={() => setReposOpen(false)}>
+              Dismiss
+            </button>
+          </div>
+        </section>
+      )}
 
       {scanOpen && (
         <section className="scan" aria-label="Repositories in this folder">
