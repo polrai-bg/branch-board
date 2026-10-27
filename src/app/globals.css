@@ -353,7 +353,24 @@ tbody tr:not(.group):hover td {
   padding-top: 8px;
 }
 
-.scan .empty {
-  padding: 8px 0 0;
-  text-align: left;
+.detail td {
+  white-space: normal;
+  background: var(--bar);
+  padding: 8px 14px 12px;
+}
+
+.detail ul {
+  margin: 6px 0;
+  padding-left: 18px;
+}
+
+.detail pre {
+  max-height: 180px;
+  overflow: auto;
+  font-size: 11px;
+  color: var(--secondary);
+}
+
+tbody tr:not(.group):not(.detail) {
+  cursor: pointer;
 }

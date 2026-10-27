@@ -91,6 +91,51 @@ export default function Board() {
   const [scanOpen, setScanOpen] = useState(false);
   const [hits, setHits] = useState<ScanHit[]>([]);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [filtersReady, setFiltersReady] = useState(false);
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  const [commitsByKey, setCommitsByKey] = useState<Record<string, { sha: string; author: string; date: string; subject: string }[] | "error">>({});
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("branchboard.filters") ?? "null") as {
+        repo?: string;
+        agent?: string;
+        status?: string;
+        flag?: string;
+        search?: string;
+        hideMerged?: boolean;
+      } | null;
+      if (saved) {
+        if (typeof saved.repo === "string") setRepo(saved.repo);
+        if (typeof saved.agent === "string") setAgent(saved.agent);
+        if (typeof saved.status === "string") setStatus(saved.status);
+        if (typeof saved.flag === "string") setFlag(saved.flag);
+        if (typeof saved.search === "string") setSearch(saved.search);
+        if (typeof saved.hideMerged === "boolean") setHideMerged(saved.hideMerged);
+      }
+    } catch {
+      // Ignore a broken saved filter.
+    }
+    setFiltersReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!filtersReady) return;
+    localStorage.setItem("branchboard.filters", JSON.stringify({ repo, agent, status, flag, search, hideMerged }));
+  }, [filtersReady, repo, agent, status, flag, search, hideMerged]);
+
+  function toggleRow(row: Row) {
+    const key = `${row.repo}/${row.name}`;
+    setOpenKey((current) => (current === key ? null : key));
+    if (commitsByKey[key]) return;
+    const params = new URLSearchParams({ repo: row.repo, branch: row.name });
+    fetch(`/api/commits?${params}`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
+      .then((body: { commits?: { sha: string; author: string; date: string; subject: string }[] }) => {
+        setCommitsByKey((current) => ({ ...current, [key]: body.commits ?? [] }));
+      })
+      .catch(() => setCommitsByKey((current) => ({ ...current, [key]: "error" })));
+  }
 
   const load = useCallback(async () => {
     try {
@@ -457,8 +502,12 @@ export default function Board() {
                   <span className="n">{group.rows.length}</span>
                 </td>
               </tr>,
-              ...group.rows.map((row) => (
-                <tr key={`${row.repo}/${row.name}`}>
+              ...group.rows.flatMap((row) => {
+                const key = `${row.repo}/${row.name}`;
+                const opened = openKey === key;
+                const loaded = commitsByKey[key];
+                return [
+                <tr key={key} className={opened ? "is-open" : undefined} onClick={(event) => { if ((event.target as HTMLElement).closest("a,button")) return; toggleRow(row); }}>
                   <td className="meta">{row.repo}</td>
                   <td className="branch">
                     {row.where === "Local" ? (
@@ -514,8 +563,36 @@ export default function Board() {
                       </button>
                     )}
                   </td>
-                </tr>
-              )),
+                </tr>,
+                ...(opened
+                  ? [
+                      <tr key={`${key}/detail`} className="detail">
+                        <td colSpan={13}>
+                          <p>Merge base {row.compare?.mergeBase ?? "none"}</p>
+                          {loaded === "error" ? (
+                            <p>Could not load commits.</p>
+                          ) : !loaded ? (
+                            <p>Loading commits…</p>
+                          ) : (
+                            <ul>
+                              {loaded.map((commit) => (
+                                <li key={commit.sha}>
+                                  <span className="branch">{commit.sha.slice(0, 7)}</span> {commit.subject}
+                                  <span className="meta">
+                                    {" "}
+                                    {commit.author} {commit.date.slice(0, 10)}
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                          <pre>{JSON.stringify(row, null, 2)}</pre>
+                        </td>
+                      </tr>,
+                    ]
+                  : []),
+              ];
+              }),
             ])}
           </tbody>
         </table>

@@ -27,8 +27,25 @@ First match wins:
 | Local only | The branch exists on this Mac and was never pushed |
 | WIP | No open PR, at least one commit not in its base. Flagged Stale after `staleDays` without a commit |
 | Empty | No PR and zero commits of its own |
+| Base | A configured base branch, such as `main` or `development`. It is not unfinished work |
 
 Unsaved, Unpushed, and Local only are the Unfinished local group. The Where column says GitHub, Local, or Both.
+
+Click a row to see the last 5 commits, the merge base, and the raw record. Repo, agent, status, flag, search, and Hide merged are remembered in this browser.
+
+## Repos
+
+**Repos** lists what is configured. **Remove** drops one. The last remaining repo stays. **Add…** picks one git folder. **Scan…** lists the git repos directly inside a work folder so you can check the ones to add. A repo name comes from the GitHub `origin` remote when there is one, otherwise from the folder name. `bases` is whichever of `main` and `development` exist.
+
+## Desktop icon
+
+`Branch Board.app` opens `launcher/index.html` in Chrome. **Start** runs the board and then opens `http://127.0.0.1:3000`. If the board is already running, **Start** just opens it. Drag the app to the Desktop or the Dock.
+
+## Stay running
+
+`npm run install-service` writes `~/Library/LaunchAgents/local.branchboard.plist`. The board starts at login on `http://127.0.0.1:3000` and launchd starts it again if it exits. It still refreshes every `refreshMinutes` (default 2). `npm run uninstall-service` removes the agent.
+
+Logs go to `.branchboard/logs/`.
 
 ## Flags
 
