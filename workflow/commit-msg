@@ -1,0 +1,61 @@
+#!/bin/sh
+# Reject a commit message that does not reference an issue as #<number>.
+# Merge commits pass. A branch whose name starts with a prefix in an
+# exempt-prefixes file passes. Prefixes are not hard-coded here.
+#
+# The first file found wins:
+#   .github/exempt-prefixes
+#   .githooks/exempt-prefixes
+#   workflow/exempt-prefixes
+# Blank lines and lines starting with # are ignored.
+
+set -eu
+
+msg_file=${1:?commit message file required}
+
+git_dir=$(git rev-parse --git-path .)
+if [ -f "$git_dir/MERGE_HEAD" ]; then
+  exit 0
+fi
+
+first_line=$(head -n 1 "$msg_file" || true)
+case "$first_line" in
+  "Merge branch "*|"Merge remote-tracking branch "*|"Merge pull request #"*|"Merge tag "*)
+    exit 0
+    ;;
+esac
+
+root=$(git rev-parse --show-toplevel)
+branch=$(git symbolic-ref --short HEAD 2>/dev/null || printf '%s\n' HEAD)
+
+exempt_file=""
+for candidate in \
+  "$root/.github/exempt-prefixes" \
+  "$root/.githooks/exempt-prefixes" \
+  "$root/workflow/exempt-prefixes"
+do
+  if [ -f "$candidate" ]; then
+    exempt_file=$candidate
+    break
+  fi
+done
+
+if [ -n "$exempt_file" ]; then
+  while IFS= read -r prefix || [ -n "$prefix" ]; do
+    prefix=$(printf '%s' "$prefix" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    case "$prefix" in
+      ""|\#*) continue ;;
+    esac
+    case "$branch" in
+      "$prefix"*) exit 0 ;;
+    esac
+  done < "$exempt_file"
+fi
+
+if grep -Eq '#[0-9]+' "$msg_file"; then
+  exit 0
+fi
+
+echo "commit-msg: message must reference an issue as #<number>" >&2
+echo "commit-msg: merge commits and exempt branch prefixes are the only bypasses" >&2
+exit 1

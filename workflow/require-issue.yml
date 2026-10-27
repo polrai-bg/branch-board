@@ -1,0 +1,25 @@
+# Copy to .github/workflows/require-issue.yml
+# The check script stays at workflow/require-issue.sh
+name: Require linked issue
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  linked-issue:
+    name: PR links an issue
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Require a linked issue
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
+        run: sh workflow/require-issue.sh
