@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Flag, Row } from "@/lib/merge.ts";
-import { FLAG_ORDER, STATUS_ORDER, UNFINISHED_STATUSES } from "@/lib/merge.ts";
+import { FLAG_ORDER, STATUS_ORDER, UNFINISHED_STATUSES, sectionOf } from "@/lib/merge.ts";
 
 type Data = {
   owner: string;
@@ -33,6 +33,29 @@ function displayPath(path: string) {
   return home ? `~${path.slice(home[0].length)}` : path;
 }
 
+type ScanHit = { name: string; path: string; added: boolean };
+
+function isScanHit(value: unknown): value is ScanHit {
+  if (!value || typeof value !== "object") return false;
+  const hit = value as ScanHit;
+  return typeof hit.name === "string" && typeof hit.path === "string" && typeof hit.added === "boolean";
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.length > 0) : [];
+}
+
+function skipErrors(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const errors: string[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const error = (item as { error?: unknown }).error;
+    if (typeof error === "string" && error) errors.push(error);
+  }
+  return errors;
+}
+
 function branchLabel(row: Row) {
   if (!row.detached) return row.name;
   const path = row.localPath ?? row.name;
@@ -45,18 +68,9 @@ function matchesFlag(row: Row, flag: string) {
   return row.flags.includes(flag as Flag);
 }
 
-// Same priority as the row sort, so a section never splits.
+// Same priority as actionRank, so a section never splits. Bases sit after Merged.
 function groupOf(row: Row): string {
-  if (row.status === "Conflicts") return "Conflicts";
-  if (UNFINISHED_STATUSES.includes(row.status)) return "On this Mac";
-  if (row.flags.includes("Overlap")) return "Overlapping";
-  if (row.flags.includes("Orphan")) return "No issue";
-  if (row.flags.includes("Stalled review")) return "Stalled";
-  if (row.flags.includes("Stale")) return "Stale";
-  if (row.status === "WIP") return "In progress";
-  if (row.status === "Open PR") return "In review";
-  if (row.status === "Empty") return "Empty";
-  return "Merged";
+  return sectionOf(row);
 }
 
 export default function Board() {
@@ -69,6 +83,12 @@ export default function Board() {
   const [flag, setFlag] = useState("");
   const [search, setSearch] = useState("");
   const [hideMerged, setHideMerged] = useState<boolean | null>(null);
+  const [picking, setPicking] = useState<"add" | "scan" | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const [scanOpen, setScanOpen] = useState(false);
+  const [hits, setHits] = useState<ScanHit[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
 
   const load = useCallback(async () => {
     try {
@@ -85,6 +105,7 @@ export default function Board() {
 
   const refreshNow = useCallback(async () => {
     setBusy(true);
+    setNote(null);
     try {
       const res = await fetch("/api/refresh", { method: "POST" });
       if (!res.ok) throw new Error(`Refresh failed (${res.status})`);
@@ -95,6 +116,91 @@ export default function Board() {
       setBusy(false);
     }
   }, [load]);
+
+  const addFolder = useCallback(async () => {
+    setPicking("add");
+    setNote(null);
+    try {
+      const res = await fetch("/api/add-folder", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      const body = (await res.json().catch(() => null)) as { error?: unknown; notice?: unknown; cancelled?: unknown } | null;
+      if (body?.cancelled === true) return;
+      if (!res.ok) {
+        const message = typeof body?.error === "string" ? body.error : `Add folder failed (${res.status})`;
+        throw new Error(message);
+      }
+      setPicking(null);
+      await refreshNow();
+      if (typeof body?.notice === "string" && body.notice) setNote(body.notice);
+    } catch (error) {
+      setLoadError((error as Error).message);
+    } finally {
+      setPicking(null);
+    }
+  }, [refreshNow]);
+
+  const scanFolder = useCallback(async () => {
+    setPicking("scan");
+    try {
+      const res = await fetch("/api/scan-folder", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      const body = (await res.json().catch(() => null)) as { error?: unknown; cancelled?: unknown; hits?: unknown } | null;
+      if (body?.cancelled === true) return;
+      if (!res.ok) {
+        const message = typeof body?.error === "string" ? body.error : `Scan folder failed (${res.status})`;
+        throw new Error(message);
+      }
+      setNote(null);
+      setLoadError(null);
+      setHits(Array.isArray(body?.hits) ? body.hits.filter(isScanHit) : []);
+      setSelected(new Set());
+      setScanOpen(true);
+    } catch (error) {
+      setLoadError((error as Error).message);
+    } finally {
+      setPicking(null);
+    }
+  }, []);
+
+  const addSelected = useCallback(async () => {
+    const paths = hits.filter((hit) => !hit.added && selected.has(hit.path)).map((hit) => hit.path);
+    if (paths.length === 0) return;
+    setAdding(true);
+    setNote(null);
+    try {
+      const res = await fetch("/api/add-repos", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ paths }),
+      });
+      const body = (await res.json().catch(() => null)) as { error?: unknown; notices?: unknown; skipped?: unknown; added?: unknown } | null;
+      if (!res.ok) {
+        const message = typeof body?.error === "string" ? body.error : `Add repos failed (${res.status})`;
+        throw new Error(message);
+      }
+      const added = Array.isArray(body?.added) ? body.added : [];
+      const followup = [...stringList(body?.notices), ...skipErrors(body?.skipped)];
+      if (added.length === 0) {
+        setLoadError(followup.join(" ") || "Nothing was added.");
+        return;
+      }
+      setScanOpen(false);
+      setHits([]);
+      setSelected(new Set());
+      await refreshNow();
+      if (followup.length > 0) setNote(followup.join(" "));
+    } catch (error) {
+      setLoadError((error as Error).message);
+    } finally {
+      setAdding(false);
+    }
+  }, [hits, refreshNow, selected]);
 
   useEffect(() => {
     let cancel = false;
@@ -122,7 +228,10 @@ export default function Board() {
       (!hideMerged || status === "Merged" || row.status !== "Merged"),
   );
 
-  const errors = [...(data?.errors ?? []), ...(loadError ? [{ message: loadError }] : [])];
+  const locked = busy || picking !== null || adding;
+  const selectable = hits.filter((hit) => !hit.added);
+  const failures: { message: string; setup?: boolean }[] = [...(data?.errors ?? []), ...(loadError ? [{ message: loadError }] : [])];
+  const errors: { message: string; setup?: boolean }[] = [...failures, ...(note ? [{ message: note }] : [])];
   const gh = `https://github.com/${data?.owner}`;
   const groups: { name: string; rows: Row[] }[] = [];
   for (const row of visible) {
@@ -135,7 +244,7 @@ export default function Board() {
   return (
     <main className="app">
       <header className="toolbar">
-        <div>
+        <div className="brand">
           <span className="title">Branch Board</span>
           <span className="sub">Updated {ago(data?.takenAt ?? null)}</span>
         </div>
@@ -144,10 +253,73 @@ export default function Board() {
           <input type="checkbox" checked={!!hideMerged} onChange={(event) => setHideMerged(event.target.checked)} />
           Hide merged
         </label>
-        <button className="push" onClick={() => void refreshNow()} disabled={busy}>
-          {busy ? "Refreshing…" : "Refresh"}
-        </button>
+        <div className="actions">
+          <button className="push" type="button" title="Add Folder" onClick={() => void addFolder()} disabled={locked}>
+            {picking === "add" ? "Choosing…" : "Add…"}
+          </button>
+          <button className="push" type="button" title="Scan Folder" onClick={() => void scanFolder()} disabled={locked}>
+            {picking === "scan" ? "Scanning…" : "Scan…"}
+          </button>
+          <button className="push" onClick={() => void refreshNow()} disabled={locked}>
+            {busy ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
       </header>
+
+      {scanOpen && (
+        <section className="scan" aria-label="Repositories in this folder">
+          {hits.length === 0 ? (
+            <p className="empty">No git repos were in that folder.</p>
+          ) : (
+            <ul className="scan-list">
+              {hits.map((hit) => (
+                <li key={hit.path} className={hit.added ? "scan-row is-added" : "scan-row"}>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={!hit.added && selected.has(hit.path)}
+                      disabled={hit.added || locked}
+                      onChange={() => {
+                        setSelected((current) => {
+                          const next = new Set(current);
+                          if (next.has(hit.path)) next.delete(hit.path);
+                          else next.add(hit.path);
+                          return next;
+                        });
+                      }}
+                    />
+                    <span className="scan-name">{hit.name}</span>
+                    <span className="scan-path" title={hit.path}>
+                      {displayPath(hit.path)}
+                    </span>
+                    {hit.added && <span className="sub">added</span>}
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="scan-actions">
+            {hits.length > 0 && (
+              <>
+                <button
+                  className="push"
+                  type="button"
+                  disabled={locked || selectable.length === 0}
+                  onClick={() => setSelected(new Set(selectable.map((hit) => hit.path)))}
+                >
+                  Select all
+                </button>
+                <button className="push" type="button" disabled={locked || selected.size === 0} onClick={() => void addSelected()}>
+                  {adding ? "Adding…" : "Add selected"}
+                </button>
+              </>
+            )}
+            <button className="push" type="button" disabled={adding || picking === "scan"} onClick={() => { setScanOpen(false); setHits([]); setSelected(new Set()); }}>
+              Dismiss
+            </button>
+          </div>
+        </section>
+      )}
 
       {errors.length > 0 && (
         <div role="alert" className="alert">
@@ -157,7 +329,7 @@ export default function Board() {
               {error.setup && <span> See the Setup section of README.md.</span>}
             </div>
           ))}
-          {data && <div>Showing the last good data.</div>}
+          {data && failures.length > 0 && <div>Showing the last good data.</div>}
         </div>
       )}
 

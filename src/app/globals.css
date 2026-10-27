@@ -72,6 +72,23 @@ body {
 .toolbar {
   height: 48px;
   flex: none;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.brand {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
+
+.actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
 }
 
 .title {
@@ -92,6 +109,8 @@ body {
 
 .grow {
   margin-left: auto;
+  flex: none;
+  white-space: nowrap;
 }
 
 .search,
@@ -118,12 +137,29 @@ select,
   background: var(--fill);
 }
 
+.toolbar .search {
+  flex: 0 100 220px;
+  width: auto;
+  min-width: 96px;
+  max-width: 220px;
+}
+
 select {
   padding: 0 4px;
 }
 
 .push {
   padding: 0 12px;
+  white-space: nowrap;
+}
+
+.toolbar .push {
+  flex: none;
+  height: 26px;
+  min-height: 26px;
+  max-height: 26px;
+  padding: 0 10px;
+  line-height: 24px;
 }
 
 .push:disabled {
@@ -132,10 +168,12 @@ select {
 
 .toolbar .check {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 6px;
   margin-left: auto;
   color: var(--secondary);
+  white-space: nowrap;
 }
 
 .scope {
@@ -255,9 +293,67 @@ tbody tr:not(.group):hover td {
 .status[data-s="WIP"] i { --dot: var(--orange); }
 .status[data-s="Open PR"] i { --dot: var(--blue); }
 .status[data-s="Merged"] i { --dot: var(--green); }
+.status[data-s="Base"] i { --dot: var(--gray); }
 
 .empty {
   padding: 48px;
   text-align: center;
   color: var(--secondary);
+}
+
+.scan {
+  flex: none;
+  background: var(--bar);
+  border-bottom: 1px solid var(--separator);
+  padding: 8px 14px 10px;
+}
+
+.scan-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.scan-row {
+  border-bottom: 1px solid var(--separator);
+}
+
+.scan-row.is-added {
+  opacity: 0.72;
+}
+
+.scan-row .check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 4px 0;
+}
+
+.scan-name {
+  flex: none;
+  font-weight: 600;
+}
+
+.scan-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--secondary);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scan-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.scan .empty {
+  padding: 8px 0 0;
+  text-align: left;
 }

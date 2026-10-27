@@ -17,8 +17,10 @@ test("401 token throws GitHubError", async () => {
 });
 
 test("deleted PR base keeps the row with no counts, and UNKNOWN mergeable stays Open PR", async () => {
+  const urls: string[] = [];
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
+    urls.push(url);
     if (url.includes("/compare/")) return json(404, { message: "Not Found" });
     const query = JSON.parse(String(init?.body)).query as string;
     if (query.includes("issue(number:")) {
@@ -60,10 +62,18 @@ test("deleted PR base keeps the row with no counts, and UNKNOWN mergeable stays 
   };
 
   const { branches, issues } = await collectRepo("token", "example-owner", "demo-repo", ["main"], { fetch: fetchImpl });
-  assert.equal(branches.length, 1);
-  assert.equal(branches[0].name, "cursor/7-slug");
-  assert.equal(branches[0].compare, null);
-  assert.equal(branches[0].prs[0].mergeable, "UNKNOWN");
-  assert.equal(statusOf(branches[0]), "Open PR");
+  assert.equal(branches.length, 2);
+  const feature = branches.find((branch) => branch.name === "cursor/7-slug");
+  const main = branches.find((branch) => branch.name === "main");
+  assert.ok(feature);
+  assert.equal(feature.compare, null);
+  assert.equal(feature.prs[0].mergeable, "UNKNOWN");
+  assert.equal(statusOf(feature), "Open PR");
+  assert.ok(main);
+  assert.equal(main.compare, null);
+  assert.equal(main.baseGuessed, false);
+  assert.equal(main.prs.length, 0);
+  assert.equal(urls.some((url) => url.includes("/compare/")), true);
+  assert.equal(urls.some((url) => url.includes("/compare/main")), false);
   assert.equal(issues.find((issue) => issue.number === 7)?.title, "Seven");
 });

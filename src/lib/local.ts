@@ -135,7 +135,7 @@ export async function collectLocal(repo: string, localPath: string, bases: strin
   if (refs.code !== 0) {
     return { records: [], error: fetchError ?? `git for-each-ref failed in ${localPath}: ${firstLine(refs.stderr)}` };
   }
-  const branches = parseRefs(refs.stdout).filter((branch) => !bases.includes(branch.name));
+  const branches = parseRefs(refs.stdout);
   const listed = await git(["worktree", "list", "--porcelain"], localPath);
   const trees = listed.code === 0 ? liveWorktrees(parseWorktrees(listed.stdout)) : [];
 
@@ -163,6 +163,7 @@ export async function collectLocal(repo: string, localPath: string, bases: strin
       unpushed = count.code === 0 ? Number.parseInt(count.stdout.trim(), 10) || 0 : 0;
     }
     const fullMessage = await git(["log", "-1", "--format=%B", `refs/heads/${branch.name}`], localPath);
+    const isBase = bases.includes(branch.name);
     records.push({
       repo,
       name: branch.name,
@@ -176,8 +177,8 @@ export async function collectLocal(repo: string, localPath: string, bases: strin
       detached: false,
       offBranch: false,
       localPath: dirtyPath.get(branch.name) ?? checkout.get(branch.name) ?? null,
-      compare: await localCompare(git, localPath, branch.name, bases),
-      baseGuessed: true,
+      compare: isBase ? null : await localCompare(git, localPath, branch.name, bases),
+      baseGuessed: !isBase,
     });
   }
 
