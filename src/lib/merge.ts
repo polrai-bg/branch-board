@@ -59,17 +59,13 @@ export type Status = "Conflicts" | "Unsaved" | "Unpushed" | "Local only" | "WIP"
 
 export const STATUS_ORDER: Status[] = ["Conflicts", "Unsaved", "Unpushed", "Local only", "WIP", "Open PR", "Empty", "Merged", "Base"];
 
-export const FLAG_ORDER = ["Orphan", "Overlap", "Stalled review", "Stale", "Issue closed"] as const;
+export const FLAG_ORDER = ["Orphan", "Overlap", "Possible duplicate", "Stalled review", "Stale", "Issue closed"] as const;
 
 export type Flag = (typeof FLAG_ORDER)[number];
 
 const UNFINISHED_LIST = ["Unsaved", "Unpushed", "Local only"] as const satisfies readonly Status[];
 
 export const UNFINISHED_STATUSES: readonly Status[] = UNFINISHED_LIST;
-
-function isUnfinished(status: Status): status is (typeof UNFINISHED_LIST)[number] {
-  return (UNFINISHED_LIST as readonly Status[]).includes(status);
-}
 
 // Metrics stored once per day. Chip totals are the sum across repos.
 export const COUNT_METRICS = ["Orphan", "Overlap", "Stalled review", "Stale", "Issue closed", "Unfinished local", "Empty"] as const;
@@ -317,19 +313,23 @@ function flagsFor(cfg: Config, row: { name: string; status: Status; issue: Issue
   return flags;
 }
 
-// One order for the sort and the page sections, so a section never splits.
-function placement(row: { status: Status; flags: readonly Flag[] }): { rank: number; section: string } {
+// The checked-out branch is the copy on this Mac. A repo with a folder has one of these per worktree.
+// Other local-only branches keep their own status section. They are not the checkout.
+function placement(row: { status: Status; flags: readonly Flag[]; localPath?: string | null }): { rank: number; section: string } {
   if (row.status === "Conflicts") return { rank: 0, section: "Conflicts" };
-  if (isUnfinished(row.status)) return { rank: 1, section: "On this Mac" };
-  if (row.flags.includes("Overlap")) return { rank: 2, section: "Overlapping" };
-  if (row.flags.includes("Orphan")) return { rank: 3, section: "No issue" };
-  if (row.flags.includes("Stalled review")) return { rank: 4, section: "Stalled" };
-  if (row.flags.includes("Stale")) return { rank: 5, section: "Stale" };
-  if (row.status === "WIP") return { rank: 6, section: "In progress" };
-  if (row.status === "Open PR") return { rank: 7, section: "In review" };
-  if (row.status === "Empty") return { rank: 8, section: "Empty" };
-  if (row.status === "Merged") return { rank: 9, section: "Merged" };
-  if (row.status === "Base") return { rank: 10, section: "Bases" };
+  if (row.localPath) return { rank: 1, section: "On this Mac" };
+  if (row.status === "Unsaved") return { rank: 2, section: "Unsaved" };
+  if (row.status === "Unpushed") return { rank: 3, section: "Unpushed" };
+  if (row.status === "Local only") return { rank: 4, section: "Local only" };
+  if (row.flags.includes("Overlap")) return { rank: 5, section: "Overlapping" };
+  if (row.flags.includes("Orphan")) return { rank: 6, section: "No issue" };
+  if (row.flags.includes("Stalled review")) return { rank: 7, section: "Stalled" };
+  if (row.flags.includes("Stale")) return { rank: 8, section: "Stale" };
+  if (row.status === "WIP") return { rank: 9, section: "In progress" };
+  if (row.status === "Open PR") return { rank: 10, section: "In review" };
+  if (row.status === "Empty") return { rank: 11, section: "Empty" };
+  if (row.status === "Merged") return { rank: 12, section: "Merged" };
+  if (row.status === "Base") return { rank: 13, section: "Bases" };
   const unreachable: never = row.status;
   return unreachable;
 }
@@ -338,7 +338,7 @@ function actionRank(row: Row): number {
   return placement(row).rank;
 }
 
-export function sectionOf(row: { status: Status; flags: readonly Flag[] }): string {
+export function sectionOf(row: { status: Status; flags: readonly Flag[]; localPath?: string | null }): string {
   return placement(row).section;
 }
 
@@ -373,13 +373,64 @@ export function buildRows(cfg: Config, remotes: RemoteBranch[], now = Date.now()
       };
     });
   const overlapped = overlapKeys(draft);
-  const rows = draft.map((row) => ({
-    ...row,
-    flags: flagsFor(cfg, row, row.issue != null && overlapped.has(`${row.repo}#${row.issue.number}`), now),
-  }));
+  const dupes = duplicateKeys(draft);
+  const rows = draft.map((row) => {
+    const flags = flagsFor(cfg, row, row.issue != null && overlapped.has(`${row.repo}#${row.issue.number}`), now);
+    if (dupes.has(`${row.repo}\0${row.name}`)) flags.push("Possible duplicate");
+    return { ...row, flags };
+  });
   return rows.sort(
-    (a, b) => actionRank(a) - actionRank(b) || a.committedDate.localeCompare(b.committedDate) || a.repo.localeCompare(b.repo) || a.name.localeCompare(b.name),
+    (a, b) => actionRank(a) - actionRank(b) || b.committedDate.localeCompare(a.committedDate) || a.repo.localeCompare(b.repo) || a.name.localeCompare(b.name),
   );
+}
+
+// Slug after the agent prefix, without an issue number, so cursor/42-login and claude/login can match.
+export function workKey(name: string): string {
+  const slug = name.includes("/") ? name.slice(name.indexOf("/") + 1) : name;
+  return slug.replace(/^\d+-(?:a\d+-)?/, "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+export function subjectKey(message: string): string {
+  return message.split("\n")[0].toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Two unmerged branches in one repo, different agents, same work slug or the same commit subject.
+export function duplicateKeys(rows: { repo: string; name: string; agent: string; status: Status; message: string }[]): Set<string> {
+  const keys = new Set<string>();
+  const byRepo = new Map<string, typeof rows>();
+  for (const row of rows) {
+    if (row.status === "Merged" || row.status === "Base") continue;
+    const list = byRepo.get(row.repo) ?? [];
+    list.push(row);
+    byRepo.set(row.repo, list);
+  }
+  for (const list of byRepo.values()) {
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i];
+        const b = list[j];
+        if (!a || !b || a.agent === b.agent) continue;
+        const wa = workKey(a.name);
+        const wb = workKey(b.name);
+        const sa = subjectKey(a.message);
+        const sb = subjectKey(b.message);
+        const nameHit = wa.length >= 8 && wa === wb;
+        const subjectHit = sa.length >= 12 && sb.length >= 12 && (sa === sb || sa.includes(sb) || sb.includes(sa));
+        if (!nameHit && !subjectHit) continue;
+        keys.add(`${a.repo}\0${a.name}`);
+        keys.add(`${b.repo}\0${b.name}`);
+      }
+    }
+  }
+  return keys;
+}
+
+export function inInbox(row: { status: Status; flags: readonly Flag[]; dirty: boolean; localPath: string | null; daysAgo: number }, staleDays: number): boolean {
+  if (row.status === "Merged" || row.status === "Base") return false;
+  if (row.status === "Conflicts" || row.status === "Local only" || row.status === "Unsaved" || row.status === "Unpushed") return true;
+  if (row.localPath && row.dirty) return true;
+  if (row.flags.includes("Possible duplicate")) return true;
+  return row.daysAgo >= staleDays;
 }
 
 export function summaryCounts(rows: Row[]): Record<string, number> {

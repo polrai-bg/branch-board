@@ -10,6 +10,8 @@ import {
   linkIssue,
   pickBase,
   sectionOf,
+  duplicateKeys,
+  inInbox,
   STATUS_ORDER,
   statusOf,
   summaryCounts,
@@ -235,7 +237,7 @@ test("buildRows joins local status, where, and sort", () => {
   assert.equal(rows.find((row) => row.name === "fresh-wip")?.issue?.title, "Three");
   assert.deepEqual(
     rows.map((row) => row.name),
-    ["conflicted", "detached-wt", "only-local", "ahead", "dirty-local", "old-wip", "empty-one", "open-stalled", "fresh-wip", "open-fresh", "merged-one"],
+    ["conflicted", "open-fresh", "dirty-local", "ahead", "only-local", "detached-wt", "empty-one", "old-wip", "open-stalled", "fresh-wip", "merged-one"],
   );
   // No commits of its own, so its tip message ("fix #30") is a base commit and does not link it.
   assert.equal(rows.find((row) => row.name === "empty-one")?.issue, null);
@@ -262,7 +264,7 @@ test("buildRows: ignore, stale flag, and action sort", () => {
   );
   assert.deepEqual(
     rows.map((row) => row.name),
-    ["conflicted", "old-wip", "empty-one", "fresh-wip", "merged-one"],
+    ["conflicted", "empty-one", "fresh-wip", "old-wip", "merged-one"],
   );
   assert.equal(rows.find((row) => row.name === "old-wip")?.stale, true);
   assert.equal(rows.find((row) => row.name === "fresh-wip")?.stale, false);
@@ -320,7 +322,7 @@ test("a configured base is Base, has no flags, and sorts after Merged", () => {
   assert.equal(main.localPath, "/tmp/demo-main");
   assert.equal(main.pr?.state, "MERGED");
   assert.equal(main.issue, null);
-  assert.equal(sectionOf(main), "Bases");
+  assert.equal(sectionOf(main), "On this Mac");
   assert.equal(UNFINISHED_STATUSES.includes(main.status), false);
 
   const development = rows.find((row) => row.repo === "demo-repo" && row.name === "development");
@@ -341,9 +343,8 @@ test("a configured base is Base, has no flags, and sorts after Merged", () => {
   assert.equal(sectionOf(sideDevelopment!), "No issue");
 
   const demo = rows.filter((row) => row.repo === "demo-repo").map((row) => row.name);
-  assert.deepEqual(demo, ["feature-x", "merged-one", "development", "main"]);
-  assert.ok(demo.indexOf("merged-one") < demo.indexOf("development"));
-  assert.ok(demo.indexOf("merged-one") < demo.indexOf("main"));
+  assert.deepEqual(demo, ["main", "feature-x", "merged-one", "development"]);
+  assert.ok(demo.indexOf("main") < demo.indexOf("merged-one"));
   assert.equal(STATUS_ORDER.at(-1), "Base");
 
   const localOnly = buildRows(
@@ -357,5 +358,17 @@ test("a configured base is Base, has no flags, and sorts after Merged", () => {
   assert.equal(localOnly[0]?.compare, null);
   assert.equal(localOnly[0]?.baseGuessed, false);
   assert.deepEqual(localOnly[0]?.flags, []);
-  assert.equal(sectionOf(localOnly[0]!), "Bases");
+  assert.equal(sectionOf(localOnly[0]!), "On this Mac");
+});
+
+test("different agents with the same branch slug are possible duplicates", () => {
+  const keys = duplicateKeys([
+    { repo: "demo-repo", name: "cursor/password-reset", agent: "Cursor", status: "WIP", message: "work" },
+    { repo: "demo-repo", name: "claude/password-reset", agent: "Claude", status: "WIP", message: "other" },
+    { repo: "demo-repo", name: "cursor/password-reset", agent: "Cursor", status: "WIP", message: "same agent" },
+  ]);
+  assert.equal(keys.has("demo-repo\0cursor/password-reset"), true);
+  assert.equal(keys.has("demo-repo\0claude/password-reset"), true);
+  assert.equal(inInbox({ status: "Merged", flags: [], dirty: false, localPath: null, daysAgo: 30 }, 7), false);
+  assert.equal(inInbox({ status: "WIP", flags: ["Possible duplicate"], dirty: false, localPath: null, daysAgo: 0 }, 7), true);
 });

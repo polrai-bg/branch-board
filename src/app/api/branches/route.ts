@@ -13,6 +13,7 @@ export function GET() {
     takenAt: snap.takenAt,
     errors: snap.errors,
     hideMergedByDefault: cfg.hideMergedByDefault,
+    staleDays: cfg.staleDays,
     rows: buildRows(cfg, snap.branches, Date.now(), snap.locals, snap.issues),
   });
 }

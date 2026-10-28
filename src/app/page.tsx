@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Flag, Row } from "@/lib/merge.ts";
-import { FLAG_ORDER, STATUS_ORDER, UNFINISHED_STATUSES, sectionOf } from "@/lib/merge.ts";
+import { FLAG_ORDER, STATUS_ORDER, UNFINISHED_STATUSES, inInbox, sectionOf } from "@/lib/merge.ts";
 
 type Data = {
   owner: string;
   takenAt: string | null;
   errors: { message: string; setup?: boolean }[];
   hideMergedByDefault: boolean;
+  staleDays: number;
   rows: Row[];
 };
 
@@ -68,9 +69,25 @@ function matchesFlag(row: Row, flag: string) {
   return row.flags.includes(flag as Flag);
 }
 
-// Same priority as actionRank, so a section never splits. Bases sit after Merged.
-function groupOf(row: Row): string {
+type GroupBy = "attention" | "repo" | "status" | "agent";
+type BoardView = "inbox" | "cards" | "all";
+
+function groupName(row: Row, by: GroupBy): string {
+  if (by === "repo") return row.repo;
+  if (by === "agent") return row.agent;
+  if (by === "status") return row.status;
   return sectionOf(row);
+}
+
+function groupedRows(rows: Row[], by: GroupBy): Row[] {
+  const newest = (a: Row, b: Row) => b.committedDate.localeCompare(a.committedDate) || a.name.localeCompare(b.name);
+  if (by === "repo") return [...rows].sort((a, b) => a.repo.localeCompare(b.repo) || newest(a, b));
+  if (by === "agent") return [...rows].sort((a, b) => a.agent.localeCompare(b.agent) || a.repo.localeCompare(b.repo) || newest(a, b));
+  if (by === "status") {
+    const rank = (status: string) => STATUS_ORDER.indexOf(status as (typeof STATUS_ORDER)[number]);
+    return [...rows].sort((a, b) => rank(a.status) - rank(b.status) || newest(a, b));
+  }
+  return rows;
 }
 
 export default function Board() {
@@ -81,6 +98,8 @@ export default function Board() {
   const [agent, setAgent] = useState("");
   const [status, setStatus] = useState("");
   const [flag, setFlag] = useState("");
+  const [groupBy, setGroupBy] = useState<GroupBy>("attention");
+  const [view, setView] = useState<BoardView>("inbox");
   const [search, setSearch] = useState("");
   const [hideMerged, setHideMerged] = useState<boolean | null>(null);
   const [picking, setPicking] = useState<"add" | "scan" | null>(null);
@@ -92,7 +111,9 @@ export default function Board() {
   const [hits, setHits] = useState<ScanHit[]>([]);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [filtersReady, setFiltersReady] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [openKey, setOpenKey] = useState<string | null>(null);
+  const [furled, setFurled] = useState<Set<string>>(() => new Set());
   const [commitsByKey, setCommitsByKey] = useState<Record<string, { sha: string; author: string; date: string; subject: string }[] | "error">>({});
 
   useEffect(() => {
@@ -104,6 +125,8 @@ export default function Board() {
         flag?: string;
         search?: string;
         hideMerged?: boolean;
+        groupBy?: GroupBy;
+        view?: BoardView;
       } | null;
       if (saved) {
         if (typeof saved.repo === "string") setRepo(saved.repo);
@@ -112,17 +135,38 @@ export default function Board() {
         if (typeof saved.flag === "string") setFlag(saved.flag);
         if (typeof saved.search === "string") setSearch(saved.search);
         if (typeof saved.hideMerged === "boolean") setHideMerged(saved.hideMerged);
+        if (saved.groupBy === "attention" || saved.groupBy === "repo" || saved.groupBy === "status" || saved.groupBy === "agent") setGroupBy(saved.groupBy);
+        if (saved.view === "inbox" || saved.view === "cards" || saved.view === "all") setView(saved.view);
       }
     } catch {
       // Ignore a broken saved filter.
     }
     setFiltersReady(true);
+    try {
+      const names = JSON.parse(localStorage.getItem("branchboard.furled") ?? "[]") as unknown;
+      if (Array.isArray(names)) setFurled(new Set(names.filter((name): name is string => typeof name === "string")));
+    } catch {
+      // Ignore a broken saved list.
+    }
   }, []);
 
   useEffect(() => {
     if (!filtersReady) return;
-    localStorage.setItem("branchboard.filters", JSON.stringify({ repo, agent, status, flag, search, hideMerged }));
-  }, [filtersReady, repo, agent, status, flag, search, hideMerged]);
+    localStorage.setItem("branchboard.filters", JSON.stringify({ repo, agent, status, flag, search, hideMerged, groupBy, view }));
+  }, [filtersReady, repo, agent, status, flag, search, hideMerged, groupBy, view]);
+
+  useEffect(() => {
+    if (!filtersReady) return;
+    localStorage.setItem("branchboard.furled", JSON.stringify([...furled]));
+  }, [filtersReady, furled]);
+
+  function said(error: unknown) {
+    const message = error instanceof Error ? error.message : "Request failed";
+    if (message === "Failed to fetch" || message === "Load failed" || message.includes("NetworkError")) {
+      return "The board server is not running. Open the Branch Board icon and click Start.";
+    }
+    return message;
+  }
 
   function toggleRow(row: Row) {
     const key = `${row.repo}/${row.name}`;
@@ -146,7 +190,7 @@ export default function Board() {
       setHideMerged((current) => current ?? next.hideMergedByDefault);
       setLoadError(null);
     } catch (error) {
-      setLoadError((error as Error).message);
+      setLoadError(said(error));
     }
   }, []);
 
@@ -158,7 +202,7 @@ export default function Board() {
       if (!res.ok) throw new Error(`Refresh failed (${res.status})`);
       await load();
     } catch (error) {
-      setLoadError((error as Error).message);
+      setLoadError(said(error));
     } finally {
       setBusy(false);
     }
@@ -176,7 +220,7 @@ export default function Board() {
     try {
       await loadConfigured();
     } catch (error) {
-      setLoadError((error as Error).message);
+      setLoadError(said(error));
     }
   }, [loadConfigured]);
 
@@ -194,7 +238,7 @@ export default function Board() {
         await loadConfigured();
         await refreshNow();
       } catch (error) {
-        setLoadError((error as Error).message);
+        setLoadError(said(error));
       }
     },
     [loadConfigured, refreshNow],
@@ -220,7 +264,7 @@ export default function Board() {
       await loadConfigured();
       if (typeof body?.notice === "string" && body.notice) setNote(body.notice);
     } catch (error) {
-      setLoadError((error as Error).message);
+      setLoadError(said(error));
     } finally {
       setPicking(null);
     }
@@ -246,7 +290,7 @@ export default function Board() {
       setSelected(new Set());
       setScanOpen(true);
     } catch (error) {
-      setLoadError((error as Error).message);
+      setLoadError(said(error));
     } finally {
       setPicking(null);
     }
@@ -281,7 +325,7 @@ export default function Board() {
       await loadConfigured();
       if (followup.length > 0) setNote(followup.join(" "));
     } catch (error) {
-      setLoadError((error as Error).message);
+      setLoadError(said(error));
     } finally {
       setAdding(false);
     }
@@ -310,17 +354,38 @@ export default function Board() {
       (!status || row.status === status) &&
       matchesFlag(row, flag) &&
       (!search || row.name.toLowerCase().includes(search.toLowerCase()) || (row.localPath?.toLowerCase().includes(search.toLowerCase()) ?? false)) &&
-      (!hideMerged || status === "Merged" || row.status !== "Merged"),
+      (!hideMerged || status === "Merged" || row.status !== "Merged") &&
+      (view !== "inbox" || inInbox(row, data?.staleDays ?? 7)),
   );
 
+  const markDone = useCallback(
+    async (row: Row) => {
+      const remote = row.where !== "Local" ? " and on GitHub" : "";
+      if (!window.confirm(`Delete ${row.name} from ${row.repo}${remote}? This cannot be undone.`)) return;
+      try {
+        const res = await fetch("/api/done", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ repo: row.repo, branch: row.name }),
+        });
+        const body = (await res.json().catch(() => null)) as { error?: string; github?: boolean } | null;
+        if (!res.ok) throw new Error(body?.error || `Delete failed (${res.status})`);
+        setNote(body?.github ? `Deleted ${row.name} on this Mac and on GitHub.` : `Deleted ${row.name} on this Mac.`);
+        await refreshNow();
+      } catch (error) {
+        setLoadError(said(error));
+      }
+    },
+    [refreshNow],
+  );
   const locked = busy || picking !== null || adding;
   const selectable = hits.filter((hit) => !hit.added);
   const failures: { message: string; setup?: boolean }[] = [...(data?.errors ?? []), ...(loadError ? [{ message: loadError }] : [])];
   const errors: { message: string; setup?: boolean }[] = [...failures, ...(note ? [{ message: note }] : [])];
   const gh = `https://github.com/${data?.owner}`;
   const groups: { name: string; rows: Row[] }[] = [];
-  for (const row of visible) {
-    const name = groupOf(row);
+  for (const row of groupedRows(visible, groupBy)) {
+    const name = groupName(row, groupBy);
     const last = groups.at(-1);
     if (last?.name === name) last.rows.push(row);
     else groups.push({ name, rows: [row] });
@@ -339,18 +404,25 @@ export default function Board() {
           Hide merged
         </label>
         <div className="actions">
-          <button className="push" type="button" onClick={() => void showRepos()}>
-            Repos
+          <button className="push" type="button" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}>
+            {picking === "add" ? "Choosing…" : picking === "scan" ? "Scanning…" : busy ? "Refreshing…" : "Menu"}
           </button>
-          <button className="push" type="button" title="Add Folder" onClick={() => void addFolder()} disabled={locked}>
-            {picking === "add" ? "Choosing…" : "Add…"}
-          </button>
-          <button className="push" type="button" title="Scan Folder" onClick={() => void scanFolder()} disabled={locked}>
-            {picking === "scan" ? "Scanning…" : "Scan…"}
-          </button>
-          <button className="push" onClick={() => void refreshNow()} disabled={locked}>
-            {busy ? "Refreshing…" : "Refresh"}
-          </button>
+          {menuOpen && (
+            <div className="menu" role="menu">
+              <button className="push" type="button" role="menuitem" onClick={() => { setMenuOpen(false); void showRepos(); }}>
+                Repos
+              </button>
+              <button className="push" type="button" role="menuitem" title="Add Folder" disabled={locked} onClick={() => { setMenuOpen(false); void addFolder(); }}>
+                Add folder
+              </button>
+              <button className="push" type="button" role="menuitem" title="Scan Folder" disabled={locked} onClick={() => { setMenuOpen(false); void scanFolder(); }}>
+                Scan folder
+              </button>
+              <button className="push" type="button" role="menuitem" disabled={locked} onClick={() => { setMenuOpen(false); void refreshNow(); }}>
+                Refresh
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -472,6 +544,17 @@ export default function Board() {
             <option key={name}>{name}</option>
           ))}
         </select>
+        <select aria-label="View" value={view} onChange={(event) => setView(event.target.value as BoardView)}>
+          <option value="inbox">View: Inbox</option>
+          <option value="cards">View: Repos</option>
+          <option value="all">View: All</option>
+        </select>
+        <select aria-label="Group" value={groupBy} onChange={(event) => setGroupBy(event.target.value as GroupBy)}>
+          <option value="attention">Group: Needs attention</option>
+          <option value="repo">Group: Repo</option>
+          <option value="agent">Group: Agent</option>
+          <option value="status">Group: Status</option>
+        </select>
         <select aria-label="Flag" value={flag} onChange={(event) => setFlag(event.target.value)}>
           <option value="">All flags</option>
           {[...FLAG_ORDER, "Unfinished local"].map((name) => (
@@ -484,6 +567,24 @@ export default function Board() {
       </div>
 
       <div className="sheet">
+        {view === "cards" ? (
+          <div className="cards">
+            {repos.map((name) => {
+              const mine = rows.filter((row) => row.repo === name);
+              const checkout = mine.find((row) => row.localPath);
+              const open = mine.filter((row) => row.status !== "Merged" && row.status !== "Base").length;
+              return (
+                <button key={name} type="button" className="card" onClick={() => { setRepo(name); setView("all"); }}>
+                  <span className="scan-name">{name}</span>
+                  <span>{checkout ? checkout.name : "Not checked out"}</span>
+                  <span className="meta">{checkout?.dirty ? "Unsaved changes" : checkout ? "Clean" : "No local folder"}</span>
+                  <span className="meta">{open} open</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <>
         <table>
           <thead>
             <tr>
@@ -495,14 +596,30 @@ export default function Board() {
             </tr>
           </thead>
           <tbody>
-            {groups.flatMap((group) => [
-              <tr key={group.name} className="group">
+            {groups.flatMap((group) => {
+              const closed = furled.has(group.name);
+              return [
+              <tr
+                key={group.name}
+                className={closed ? "group is-furled" : "group"}
+                onClick={() =>
+                  setFurled((current) => {
+                    const next = new Set(current);
+                    if (next.has(group.name)) next.delete(group.name);
+                    else next.add(group.name);
+                    return next;
+                  })
+                }
+              >
                 <td colSpan={13}>
+                  <span className="twist" aria-hidden="true">
+                    {closed ? "▸" : "▾"}
+                  </span>
                   {group.name}
                   <span className="n">{group.rows.length}</span>
                 </td>
               </tr>,
-              ...group.rows.flatMap((row) => {
+              ...(closed ? [] : group.rows.flatMap((row) => {
                 const key = `${row.repo}/${row.name}`;
                 const opened = openKey === key;
                 const loaded = commitsByKey[key];
@@ -518,6 +635,7 @@ export default function Board() {
                       </a>
                     )}
                     {row.attempt && <span className="meta"> {row.attempt}</span>}
+                    {row.message.split("\n")[0] && <div className="blurb">{row.message.split("\n")[0]}</div>}
                   </td>
                   <td>
                     {row.issue && (
@@ -562,6 +680,11 @@ export default function Board() {
                         {displayPath(row.localPath)}
                       </button>
                     )}
+                    {row.status !== "Base" && (
+                      <button type="button" className="push done" onClick={() => void markDone(row)}>
+                        Done
+                      </button>
+                    )}
                   </td>
                 </tr>,
                 ...(opened
@@ -591,12 +714,15 @@ export default function Board() {
                       </tr>,
                     ]
                   : []),
+                ];
+              })),
               ];
-              }),
-            ])}
+            })}
           </tbody>
         </table>
         {data && visible.length === 0 && <p className="empty">No branches match.</p>}
+          </>
+        )}
       </div>
     </main>
   );
