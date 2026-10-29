@@ -426,6 +426,8 @@ export function duplicateKeys(rows: { repo: string; name: string; agent: string;
 }
 
 export function inInbox(row: { status: Status; flags: readonly Flag[]; dirty: boolean; localPath: string | null; daysAgo: number }, staleDays: number): boolean {
+  // A dirty checkout is work on this Mac even when the branch is main.
+  if (row.localPath && row.dirty) return true;
   if (row.status === "Merged" || row.status === "Base") return false;
   if (row.status === "Conflicts" || row.status === "Local only" || row.status === "Unsaved" || row.status === "Unpushed") return true;
   if (row.localPath && row.dirty) return true;

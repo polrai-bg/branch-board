@@ -370,5 +370,6 @@ test("different agents with the same branch slug are possible duplicates", () =>
   assert.equal(keys.has("demo-repo\0cursor/password-reset"), true);
   assert.equal(keys.has("demo-repo\0claude/password-reset"), true);
   assert.equal(inInbox({ status: "Merged", flags: [], dirty: false, localPath: null, daysAgo: 30 }, 7), false);
+  assert.equal(inInbox({ status: "Base", flags: [], dirty: true, localPath: "/tmp/repo", daysAgo: 0 }, 7), true);
   assert.equal(inInbox({ status: "WIP", flags: ["Possible duplicate"], dirty: false, localPath: null, daysAgo: 0 }, 7), true);
 });
