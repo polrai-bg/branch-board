@@ -280,7 +280,6 @@ select {
 .tasks-parent,
 .tasks-child {
   display: grid;
-  grid-template-columns: 16px 18px minmax(0, 1fr) auto;
   align-items: start;
   gap: 10px;
   width: 100%;
@@ -294,7 +293,12 @@ select {
 }
 
 .tasks-parent {
+  grid-template-columns: 16px 18px minmax(0, 1fr) auto;
   cursor: pointer;
+}
+
+.tasks-child {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
 }
 
 .tasks-parent:hover,
