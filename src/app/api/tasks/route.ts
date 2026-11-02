@@ -25,13 +25,14 @@ export function GET() {
     const open = openTasks(row.tasks);
     if (open.length === 0) continue;
     const key = `${row.repo}\0${row.name}`;
-    for (const task of open) attached.add(`${task.source}\0${task.listId}\0${task.id}`);
+    // Keep completed siblings so the UI can show "2 of 5" and strikethrough Done items.
+    for (const task of row.tasks) attached.add(`${task.source}\0${task.listId}\0${task.id}`);
     groups.set(key, {
       repo: row.repo,
       branch: row.name,
       status: row.status,
       branchGone: false,
-      tasks: open,
+      tasks: row.tasks,
     });
   }
 

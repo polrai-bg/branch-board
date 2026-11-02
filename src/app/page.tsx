@@ -83,14 +83,119 @@ type TaskGroup = {
 
 function taskSourceLabel(task: TaskItem): string {
   if (task.source === "claude-code") return "Claude Code";
-  if (task.source === "issue") return task.issue != null ? `Issue #${task.issue}` : "Issue";
-  return task.listId.startsWith("pr:") ? `PR #${task.listId.slice(3)}` : "PR";
+  if (task.source === "issue") return task.issue != null ? `#${task.issue}` : "Issue";
+  return task.listId.startsWith("pr:") ? `!#${task.listId.slice(3)}` : "PR";
 }
 
 function taskStatusLabel(task: TaskItem): string {
   if (task.status === "in_progress") return task.activeForm || "In progress";
   if (task.status === "completed") return "Done";
   return "Pending";
+}
+
+function TasksList({
+  groups,
+  furled,
+  onToggle,
+  owner,
+}: {
+  groups: TaskGroup[];
+  furled: Set<string>;
+  onToggle: (key: string) => void;
+  owner: string | undefined;
+}) {
+  const byRepo = new Map<string, TaskGroup[]>();
+  for (const group of groups) {
+    const name = group.repo ?? "Not tied to a branch";
+    const list = byRepo.get(name) ?? [];
+    list.push(group);
+    byRepo.set(name, list);
+  }
+
+  return (
+    <div className="tasks-list">
+      {[...byRepo.entries()].map(([repoName, repoGroups]) => {
+        const sectionKey = `tasks:${repoName}`;
+        const closed = furled.has(sectionKey);
+        const openCount = repoGroups.reduce((n, group) => n + group.tasks.filter((task) => task.status !== "completed").length, 0);
+        return (
+          <section key={sectionKey} className="tasks-section">
+            <button type="button" className="tasks-section-head" onClick={() => onToggle(sectionKey)}>
+              <span className="twist" aria-hidden="true">
+                {closed ? "▸" : "▾"}
+              </span>
+              <span className="tasks-section-name">{repoName}</span>
+              <span className="tasks-count">{openCount}</span>
+            </button>
+            {!closed &&
+              repoGroups.map((group) => {
+                const branchKey = `tasks:${repoName}\0${group.branch ?? ""}`;
+                const branchClosed = furled.has(branchKey);
+                const done = group.tasks.filter((task) => task.status === "completed").length;
+                const total = group.tasks.length;
+                const open = total - done;
+                const issue = group.tasks.find((task) => task.issue != null)?.issue;
+                const prTask = group.tasks.find((task) => task.source === "pr");
+                const prNumber = prTask?.listId.startsWith("pr:") ? prTask.listId.slice(3) : null;
+                return (
+                  <div key={branchKey} className="tasks-branch">
+                    <button type="button" className="tasks-parent" onClick={() => onToggle(branchKey)}>
+                      <span className="twist" aria-hidden="true">
+                        {branchClosed ? "▸" : "▾"}
+                      </span>
+                      <span className="task-mark" data-s={open === 0 ? "completed" : "pending"} aria-hidden="true">
+                        {open === 0 ? "✓" : ""}
+                      </span>
+                      <span className="tasks-parent-body">
+                        <span className="tasks-parent-title">
+                          <span className="branch">{group.branch ?? "untied"}</span>
+                          {group.branchGone && <span className="meta"> gone</span>}
+                        </span>
+                        <span className="meta">{open} of {total}</span>
+                      </span>
+                      <span className="tasks-badges">
+                        {group.status && (
+                          <span className="status" data-s={group.status}>
+                            <i />
+                            {group.status}
+                          </span>
+                        )}
+                        {prNumber && owner && group.repo ? (
+                          <a className="task-badge is-pr" href={`https://github.com/${owner}/${group.repo}/pull/${prNumber}`} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+                            !#{prNumber}
+                          </a>
+                        ) : null}
+                        {issue != null && owner && group.repo ? (
+                          <a className="task-badge is-issue" href={`https://github.com/${owner}/${group.repo}/issues/${issue}`} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
+                            #{issue}
+                          </a>
+                        ) : null}
+                      </span>
+                    </button>
+                    {!branchClosed && (
+                      <ul className="tasks-children">
+                        {group.tasks.map((task, index) => (
+                          <li key={`${task.source}-${task.listId}-${task.id}`} className="tasks-child" data-s={task.status} data-last={index === group.tasks.length - 1 ? "1" : "0"}>
+                            <span className="task-mark" data-s={task.status} title={taskStatusLabel(task)} aria-hidden="true">
+                              {task.status === "completed" ? "✓" : task.status === "in_progress" ? "●" : ""}
+                            </span>
+                            <span className="tasks-child-body">
+                              <span className="tasks-child-title">{task.subject}</span>
+                              {task.blockedBy.length > 0 && <span className="meta">Blocked by {task.blockedBy.join(", ")}</span>}
+                            </span>
+                            <span className="task-badge">{taskSourceLabel(task)}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })}
+          </section>
+        );
+      })}
+    </div>
+  );
 }
 
 function groupName(row: Row, by: GroupBy): string {
@@ -688,7 +793,9 @@ export default function Board() {
           ))}
         </select>
         <span className="sub grow">
-          {view === "tasks" ? `${taskGroups?.reduce((n, g) => n + g.tasks.length, 0) ?? 0} open` : `${visible.length} of ${rows.length}`}
+          {view === "tasks"
+            ? `${taskGroups?.reduce((n, g) => n + g.tasks.filter((task) => task.status !== "completed").length, 0) ?? 0} open`
+            : `${visible.length} of ${rows.length}`}
         </span>
       </div>
 
@@ -715,37 +822,25 @@ export default function Board() {
 
       <div className="sheet">
         {view === "tasks" ? (
-          <div className="tasks-view">
-            {!taskGroups ? (
-              <p className="empty">Loading tasks…</p>
-            ) : taskGroups.length === 0 ? (
-              <p className="empty">No open tasks.</p>
-            ) : (
-              taskGroups.map((group) => {
-                const title =
-                  group.repo == null
-                    ? "Not tied to a branch"
-                    : `${group.repo} / ${group.branch ?? "?"}${group.branchGone ? " (branch gone)" : group.status ? ` · ${group.status}` : ""}`;
-                return (
-                  <section key={`${group.repo ?? ""}\0${group.branch ?? ""}`} className="task-group">
-                    <h2>{title}</h2>
-                    <ul>
-                      {group.tasks.map((task) => (
-                        <li key={`${task.source}-${task.listId}-${task.id}`}>
-                          <span className="branch">{task.subject}</span>
-                          <span className="meta">
-                            {" "}
-                            {taskStatusLabel(task)} · {taskSourceLabel(task)}
-                            {task.blockedBy.length > 0 ? ` · blocked by ${task.blockedBy.join(", ")}` : ""}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </section>
-                );
-              })
-            )}
-          </div>
+          !taskGroups ? (
+            <p className="empty">Loading tasks…</p>
+          ) : taskGroups.length === 0 ? (
+            <p className="empty">No open tasks.</p>
+          ) : (
+            <TasksList
+              groups={taskGroups}
+              furled={furled}
+              owner={data?.owner}
+              onToggle={(key) =>
+                setFurled((current) => {
+                  const next = new Set(current);
+                  if (next.has(key)) next.delete(key);
+                  else next.add(key);
+                  return next;
+                })
+              }
+            />
+          )
         ) : view === "graph" ? (
           <Graph rows={rows} repo={repo} agent={agent} search={search} onOpen={(name) => { setRepo(name); setView("all"); }} />
         ) : view === "cards" ? (
