@@ -24,5 +24,9 @@
   "refreshMinutes": 2,
   "staleDays": 7,
   "stalledReviewDays": 3,
-  "hideMergedByDefault": true
+  "hideMergedByDefault": true,
+  "claudeConfigDir": "~/.claude",
+  "taskLists": [
+    { "list": "feature-auth", "repo": "repo-one", "branch": "claude/42-auth" }
+  ]
 }

@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Flag, Row } from "@/lib/merge.ts";
-import { FLAG_ORDER, STATUS_ORDER, UNFINISHED_STATUSES, inInbox, sectionOf } from "@/lib/merge.ts";
+import type { Flag, Row, TaskItem } from "@/lib/merge.ts";
+import { FLAG_ORDER, STATUS_ORDER, UNFINISHED_STATUSES, inInbox, openTasks, sectionOf, taskColumnLabel } from "@/lib/merge.ts";
 
 type Data = {
   owner: string;
@@ -66,11 +66,32 @@ function branchLabel(row: Row) {
 function matchesFlag(row: Row, flag: string) {
   if (!flag) return true;
   if (flag === "Unfinished local") return UNFINISHED_STATUSES.includes(row.status);
+  if (flag === "Tasks open") return openTasks(row.tasks).length > 0;
   return row.flags.includes(flag as Flag);
 }
 
 type GroupBy = "attention" | "repo" | "status" | "agent";
-type BoardView = "inbox" | "cards" | "all";
+type BoardView = "inbox" | "cards" | "graph" | "all" | "tasks";
+
+type TaskGroup = {
+  repo: string | null;
+  branch: string | null;
+  status: string | null;
+  branchGone: boolean;
+  tasks: TaskItem[];
+};
+
+function taskSourceLabel(task: TaskItem): string {
+  if (task.source === "claude-code") return "Claude Code";
+  if (task.source === "issue") return task.issue != null ? `Issue #${task.issue}` : "Issue";
+  return task.listId.startsWith("pr:") ? `PR #${task.listId.slice(3)}` : "PR";
+}
+
+function taskStatusLabel(task: TaskItem): string {
+  if (task.status === "in_progress") return task.activeForm || "In progress";
+  if (task.status === "completed") return "Done";
+  return "Pending";
+}
 
 function groupName(row: Row, by: GroupBy): string {
   if (by === "repo") return row.repo;
@@ -88,6 +109,82 @@ function groupedRows(rows: Row[], by: GroupBy): Row[] {
     return [...rows].sort((a, b) => rank(a.status) - rank(b.status) || newest(a, b));
   }
   return rows;
+}
+
+const LANE: Record<string, string> = {
+  Cursor: "var(--blue)",
+  Claude: "var(--orange)",
+  "Claude (cloud)": "var(--orange)",
+  Codex: "var(--teal)",
+  "Grok Bot": "var(--purple)",
+  "Grok Build": "var(--purple)",
+  Copilot: "var(--green)",
+};
+
+function laneColor(agent: string) {
+  return LANE[agent] ?? "var(--gray)";
+}
+
+function Graph({ rows, repo, agent, search, onOpen }: { rows: Row[]; repo: string; agent: string; search: string; onOpen: (repo: string) => void }) {
+  const shown = rows.filter(
+    (row) =>
+      (!repo || row.repo === repo) &&
+      (!agent || row.agent === agent) &&
+      (!search || row.name.toLowerCase().includes(search.toLowerCase())) &&
+      (row.status === "Base" || row.status !== "Merged"),
+  );
+  const names = [...new Set(shown.map((row) => row.repo))].sort();
+  if (names.length === 0) return <p className="empty">No open branches.</p>;
+  return (
+    <div className="graph">
+      {names.map((name) => {
+        const mine = shown.filter((row) => row.repo === name);
+        const bases = mine.filter((row) => row.status === "Base");
+        const open = mine.filter((row) => row.status !== "Base").sort((a, b) => b.committedDate.localeCompare(a.committedDate));
+        return (
+          <section key={name} className="graph-repo">
+            <button type="button" className="graph-title" onClick={() => onOpen(name)}>
+              {name}
+              <span className="n">{open.length}</span>
+            </button>
+            <div className="lanes">
+              {bases.map((row) => (
+                <Lane key={row.name} row={row} trunk />
+              ))}
+              {open.map((row) => (
+                <Lane key={row.name} row={row} />
+              ))}
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function Lane({ row, trunk }: { row: Row; trunk?: boolean }) {
+  const color = trunk ? "var(--tertiary)" : laneColor(row.agent);
+  const subject = row.message.split("\n")[0];
+  return (
+    <div className={trunk ? "lane is-trunk" : "lane"}>
+      <svg className="lane-mark" viewBox="0 0 72 36" aria-hidden="true">
+        {trunk ? <line x1="8" y1="0" x2="8" y2="36" stroke={color} strokeWidth="2" /> : <path d="M8 0 V18 H58" fill="none" stroke={color} strokeWidth="2" />}
+        <circle cx={trunk ? 8 : 58} cy="18" r="5" fill={color} />
+      </svg>
+      <div className="lane-body">
+        <div className="lane-title">
+          <span className="branch">{row.name}</span>
+          {row.localPath && <span className="pill">On this Mac{row.dirty ? ", unsaved" : ""}</span>}
+          {row.pr && <span className="pill">#{row.pr.number}</span>}
+        </div>
+        {subject && <div className="blurb">{subject}</div>}
+        <div className="meta">
+          {row.agent} · {row.status}
+          {row.compare ? ` · ${row.compare.ahead} ahead, ${row.compare.behind} behind` : ""}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function Board() {
@@ -115,6 +212,8 @@ export default function Board() {
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [furled, setFurled] = useState<Set<string>>(() => new Set());
   const [commitsByKey, setCommitsByKey] = useState<Record<string, { sha: string; author: string; date: string; subject: string }[] | "error">>({});
+  const [taskGroups, setTaskGroups] = useState<TaskGroup[] | null>(null);
+  const [counts, setCounts] = useState<Record<string, number>>({});
 
   useEffect(() => {
     try {
@@ -136,7 +235,7 @@ export default function Board() {
         if (typeof saved.search === "string") setSearch(saved.search);
         if (typeof saved.hideMerged === "boolean") setHideMerged(saved.hideMerged);
         if (saved.groupBy === "attention" || saved.groupBy === "repo" || saved.groupBy === "status" || saved.groupBy === "agent") setGroupBy(saved.groupBy);
-        if (saved.view === "inbox" || saved.view === "cards" || saved.view === "all") setView(saved.view);
+        if (saved.view === "inbox" || saved.view === "cards" || saved.view === "graph" || saved.view === "all" || saved.view === "tasks") setView(saved.view);
       }
     } catch {
       // Ignore a broken saved filter.
@@ -183,16 +282,41 @@ export default function Board() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch("/api/branches", { cache: "no-store" });
-      if (!res.ok) throw new Error(`/api/branches returned ${res.status}`);
-      const next: Data = await res.json();
+      const [branchesRes, countsRes] = await Promise.all([
+        fetch("/api/branches", { cache: "no-store" }),
+        fetch("/api/counts", { cache: "no-store" }),
+      ]);
+      if (!branchesRes.ok) throw new Error(`/api/branches returned ${branchesRes.status}`);
+      const next: Data = await branchesRes.json();
       setData(next);
       setHideMerged((current) => current ?? next.hideMergedByDefault);
+      if (countsRes.ok) {
+        const body = (await countsRes.json()) as { totals?: Record<string, number> };
+        setCounts(body.totals ?? {});
+      }
       setLoadError(null);
     } catch (error) {
       setLoadError(said(error));
     }
   }, []);
+
+  useEffect(() => {
+    if (view !== "tasks") return;
+    let cancel = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/tasks", { cache: "no-store" });
+        if (!res.ok) throw new Error(`/api/tasks returned ${res.status}`);
+        const body = (await res.json()) as { groups?: TaskGroup[] };
+        if (!cancel) setTaskGroups(body.groups ?? []);
+      } catch (error) {
+        if (!cancel) setLoadError(said(error));
+      }
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, [view, data?.takenAt]);
 
   const refreshNow = useCallback(async () => {
     setBusy(true);
@@ -354,7 +478,7 @@ export default function Board() {
       (!status || row.status === status) &&
       matchesFlag(row, flag) &&
       (!search || row.name.toLowerCase().includes(search.toLowerCase()) || (row.localPath?.toLowerCase().includes(search.toLowerCase()) ?? false)) &&
-      (!hideMerged || status === "Merged" || row.status !== "Merged") &&
+      (!hideMerged || status === "Merged" || row.status !== "Merged" || openTasks(row.tasks).length > 0) &&
       (view !== "inbox" || inInbox(row, data?.staleDays ?? 7)),
   );
 
@@ -546,6 +670,8 @@ export default function Board() {
         </select>
         <select aria-label="View" value={view} onChange={(event) => setView(event.target.value as BoardView)}>
           <option value="inbox">View: Inbox</option>
+          <option value="tasks">View: Tasks</option>
+          <option value="graph">View: Graph</option>
           <option value="cards">View: Repos</option>
           <option value="all">View: All</option>
         </select>
@@ -562,12 +688,67 @@ export default function Board() {
           ))}
         </select>
         <span className="sub grow">
-          {visible.length} of {rows.length}
+          {view === "tasks" ? `${taskGroups?.reduce((n, g) => n + g.tasks.length, 0) ?? 0} open` : `${visible.length} of ${rows.length}`}
         </span>
       </div>
 
+      <div className="chips" role="toolbar" aria-label="Flag chips">
+        {[...FLAG_ORDER, "Unfinished local"].map((name) => {
+          const count = counts[name] ?? 0;
+          if (name !== "Tasks open" && count === 0 && flag !== name) return null;
+          return (
+            <button
+              key={name}
+              type="button"
+              className={flag === name ? "chip is-on" : "chip"}
+              onClick={() => {
+                setFlag((current) => (current === name ? "" : name));
+                if (name === "Tasks open") setView((current) => (current === "tasks" ? current : "inbox"));
+              }}
+            >
+              {name}
+              <span className="n">{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
       <div className="sheet">
-        {view === "cards" ? (
+        {view === "tasks" ? (
+          <div className="tasks-view">
+            {!taskGroups ? (
+              <p className="empty">Loading tasks…</p>
+            ) : taskGroups.length === 0 ? (
+              <p className="empty">No open tasks.</p>
+            ) : (
+              taskGroups.map((group) => {
+                const title =
+                  group.repo == null
+                    ? "Not tied to a branch"
+                    : `${group.repo} / ${group.branch ?? "?"}${group.branchGone ? " (branch gone)" : group.status ? ` · ${group.status}` : ""}`;
+                return (
+                  <section key={`${group.repo ?? ""}\0${group.branch ?? ""}`} className="task-group">
+                    <h2>{title}</h2>
+                    <ul>
+                      {group.tasks.map((task) => (
+                        <li key={`${task.source}-${task.listId}-${task.id}`}>
+                          <span className="branch">{task.subject}</span>
+                          <span className="meta">
+                            {" "}
+                            {taskStatusLabel(task)} · {taskSourceLabel(task)}
+                            {task.blockedBy.length > 0 ? ` · blocked by ${task.blockedBy.join(", ")}` : ""}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                );
+              })
+            )}
+          </div>
+        ) : view === "graph" ? (
+          <Graph rows={rows} repo={repo} agent={agent} search={search} onOpen={(name) => { setRepo(name); setView("all"); }} />
+        ) : view === "cards" ? (
           <div className="cards">
             {repos.map((name) => {
               const mine = rows.filter((row) => row.repo === name);
@@ -588,7 +769,7 @@ export default function Board() {
         <table>
           <thead>
             <tr>
-              {["Repo", "Branch", "Issue", "Agent", "Status", "Flags", "Base", "Ahead", "Behind", "Last commit", "Where", "PR", "Local path"].map((heading) => (
+              {["Repo", "Branch", "Issue", "Agent", "Status", "Tasks", "Flags", "Base", "Ahead", "Behind", "Last commit", "Where", "PR", "Local path"].map((heading) => (
                 <th key={heading} className={heading === "Ahead" || heading === "Behind" ? "num" : undefined}>
                   {heading}
                 </th>
@@ -611,7 +792,7 @@ export default function Board() {
                   })
                 }
               >
-                <td colSpan={13}>
+                <td colSpan={14}>
                   <span className="twist" aria-hidden="true">
                     {closed ? "▸" : "▾"}
                   </span>
@@ -623,6 +804,7 @@ export default function Board() {
                 const key = `${row.repo}/${row.name}`;
                 const opened = openKey === key;
                 const loaded = commitsByKey[key];
+                const taskLabel = taskColumnLabel(row.tasks);
                 return [
                 <tr key={key} className={opened ? "is-open" : undefined} onClick={(event) => { if ((event.target as HTMLElement).closest("a,button")) return; toggleRow(row); }}>
                   <td className="meta">{row.repo}</td>
@@ -651,6 +833,7 @@ export default function Board() {
                       {row.status}
                     </span>
                   </td>
+                  <td className="meta">{taskLabel}</td>
                   <td className="meta">{row.flags.join(", ")}</td>
                   <td className="branch">
                     {row.compare?.base ?? ""}
@@ -690,7 +873,7 @@ export default function Board() {
                 ...(opened
                   ? [
                       <tr key={`${key}/detail`} className="detail">
-                        <td colSpan={13}>
+                        <td colSpan={14}>
                           <p>Merge base {row.compare?.mergeBase ?? "none"}</p>
                           {loaded === "error" ? (
                             <p>Could not load commits.</p>
@@ -708,6 +891,23 @@ export default function Board() {
                                 </li>
                               ))}
                             </ul>
+                          )}
+                          {row.tasks.length > 0 && (
+                            <>
+                              <p>Tasks</p>
+                              <ul>
+                                {row.tasks.map((task) => (
+                                  <li key={`${task.source}-${task.listId}-${task.id}`}>
+                                    <span className="branch">{task.subject}</span>
+                                    <span className="meta">
+                                      {" "}
+                                      {taskStatusLabel(task)} · {taskSourceLabel(task)}
+                                      {task.blockedBy.length > 0 ? ` · blocked by ${task.blockedBy.join(", ")}` : ""}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </>
                           )}
                           <pre>{JSON.stringify(row, null, 2)}</pre>
                         </td>

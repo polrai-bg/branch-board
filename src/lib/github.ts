@@ -54,7 +54,7 @@ const QUERY = `query($owner: String!, $name: String!, $cursor: String) {
         target { ... on Commit { oid committedDate message author { name user { login } } } }
         associatedPullRequests(first: 5, orderBy: { field: CREATED_AT, direction: DESC }) {
           nodes {
-            number url state mergeable baseRefName updatedAt
+            number url state mergeable baseRefName updatedAt body
             closingIssuesReferences(first: 20) {
               nodes { number title state repository { nameWithOwner } }
             }
@@ -76,6 +76,7 @@ type RefNode = {
       mergeable: PR["mergeable"];
       baseRefName: string;
       updatedAt?: string | null;
+      body?: string | null;
       closingIssuesReferences?: { nodes: { number: number; title?: string; state?: IssueInfo["state"]; repository?: { nameWithOwner?: string } }[] };
     }[];
   } | null;
@@ -96,6 +97,7 @@ function mapPR(node: NonNullable<RefNode["associatedPullRequests"]>["nodes"][num
     mergeable: node.mergeable,
     baseRefName: node.baseRefName,
     updatedAt: node.updatedAt ?? null,
+    body: node.body ?? null,
     closingIssues: (node.closingIssuesReferences?.nodes ?? []).filter(Boolean).map((issue) => ({
       number: issue.number,
       nameWithOwner: issue.repository?.nameWithOwner ?? "",
@@ -140,13 +142,36 @@ function candidateNumbers(owner: string, repo: string, branches: RemoteBranch[],
   return [...found];
 }
 
-async function lookupIssues(fetchImpl: FetchImpl, token: string, owner: string, repo: string, numbers: number[]): Promise<IssueInfo[]> {
+type IssueNode = {
+  number: number;
+  title: string;
+  state: IssueInfo["state"];
+  body?: string | null;
+  updatedAt?: string | null;
+  comments?: { nodes: { body: string; createdAt: string }[] };
+};
+
+async function lookupIssues(
+  fetchImpl: FetchImpl,
+  token: string,
+  owner: string,
+  repo: string,
+  numbers: number[],
+  withHandoff: Set<number>,
+): Promise<IssueInfo[]> {
   const issues: IssueInfo[] = [];
   for (let start = 0; start < numbers.length; start += 40) {
     const chunk = numbers.slice(start, start + 40);
-    const fields = chunk.map((number) => `i_${number}: issue(number: ${number}) { number title state }`).join("\n");
+    const fields = chunk
+      .map((number) => {
+        const handoff = withHandoff.has(number)
+          ? ` comments(last: 20) { nodes { body createdAt } }`
+          : "";
+        return `i_${number}: issue(number: ${number}) { number title state body updatedAt${handoff} }`;
+      })
+      .join("\n");
     const query = `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${fields} } }`;
-    const page = await gh<{ data: { repository: Record<string, { number: number; title: string; state: IssueInfo["state"] } | null> | null } }>(
+    const page = await gh<{ data: { repository: Record<string, IssueNode | null> | null } }>(
       fetchImpl,
       token,
       "/graphql",
@@ -156,7 +181,22 @@ async function lookupIssues(fetchImpl: FetchImpl, token: string, owner: string, 
     if (!repository) continue;
     for (const number of chunk) {
       const issue = repository[`i_${number}`];
-      if (issue?.number && issue.title && issue.state) issues.push({ repo, number: issue.number, title: issue.title, state: issue.state });
+      if (!issue?.number || !issue.title || !issue.state) continue;
+      let body = issue.body ?? null;
+      if (withHandoff.has(number) && issue.comments?.nodes?.length) {
+        const handoff = [...issue.comments.nodes].reverse().find((comment) => /^\s*##\s+Handoff\b/i.test(comment.body ?? ""));
+        if (handoff?.body) {
+          body = `${body ?? ""}\n\n${handoff.body}`;
+        }
+      }
+      issues.push({
+        repo,
+        number: issue.number,
+        title: issue.title,
+        state: issue.state,
+        body,
+        updatedAt: issue.updatedAt ?? null,
+      });
     }
   }
   return issues;
@@ -221,7 +261,28 @@ export async function collectRepo(token: string, owner: string, repo: string, ba
   );
 
   const numbers = candidateNumbers(owner, repo, branches, opts.issuePattern ?? DEFAULT_ISSUE_PATTERN, opts.extraIssueNumbers ?? []);
-  const lookedUp = numbers.length ? await lookupIssues(fetchImpl, token, owner, repo, numbers) : [];
+  // Handoff Remaining work lives in a comment. Fetch comments only for issues tied to an unmerged branch.
+  const withHandoff = new Set<number>();
+  for (const branch of branches) {
+    const open = branch.prs.some((pr) => pr.state === "OPEN") || (branch.compare?.ahead ?? 0) > 0;
+    if (!open) continue;
+    // Numbers are resolved after lookup; use name/message/closing refs here.
+    for (const pr of branch.prs) {
+      for (const closing of pr.closingIssues ?? []) {
+        if (closing.number > 0 && sameRepo(owner, repo, closing.nameWithOwner)) withHandoff.add(closing.number);
+      }
+    }
+  }
+  for (const number of numbers) {
+    // Prefer comments for every candidate linked to any branch that is not clearly merged-only.
+    const linked = branches.some((branch) => {
+      const merged = branch.prs.some((pr) => pr.state === "MERGED") && !branch.prs.some((pr) => pr.state === "OPEN");
+      if (merged && (branch.compare?.ahead ?? 0) === 0) return false;
+      return branch.prs.some((pr) => pr.closingIssues?.some((closing) => closing.number === number));
+    });
+    if (linked) withHandoff.add(number);
+  }
+  const lookedUp = numbers.length ? await lookupIssues(fetchImpl, token, owner, repo, numbers, withHandoff) : [];
   const issues = new Map<number, IssueInfo>();
   for (const issue of fromClosings) issues.set(issue.number, issue);
   for (const issue of lookedUp) issues.set(issue.number, issue);

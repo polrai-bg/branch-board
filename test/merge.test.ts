@@ -15,6 +15,7 @@ import {
   STATUS_ORDER,
   statusOf,
   summaryCounts,
+  taskColumnLabel,
   UNFINISHED_STATUSES,
   type IssueInfo,
   type LocalRecord,
@@ -41,6 +42,8 @@ const cfg: Config = {
   staleDays: 7,
   stalledReviewDays: 3,
   hideMergedByDefault: true,
+  claudeConfigDir: null,
+  taskLists: [],
 };
 
 const NOW = Date.parse("2026-01-20T00:00:00Z");
@@ -372,4 +375,90 @@ test("different agents with the same branch slug are possible duplicates", () =>
   assert.equal(inInbox({ status: "Merged", flags: [], dirty: false, localPath: null, daysAgo: 30 }, 7), false);
   assert.equal(inInbox({ status: "Base", flags: [], dirty: true, localPath: "/tmp/repo", daysAgo: 0 }, 7), true);
   assert.equal(inInbox({ status: "WIP", flags: ["Possible duplicate"], dirty: false, localPath: null, daysAgo: 0 }, 7), true);
+  assert.equal(
+    inInbox(
+      {
+        status: "Merged",
+        flags: ["Tasks open"],
+        dirty: false,
+        localPath: null,
+        daysAgo: 30,
+        tasks: [
+          {
+            source: "issue",
+            listId: "issue:1",
+            id: "1",
+            subject: "Ship",
+            status: "pending",
+            activeForm: null,
+            blockedBy: [],
+            owner: null,
+            repo: "demo-repo",
+            branch: null,
+            issue: 1,
+            updatedAt: "2026-01-20T00:00:00Z",
+          },
+        ],
+      },
+      7,
+    ),
+    true,
+  );
+});
+
+test("Tasks open flag, column label, and metric", () => {
+  const tasks = [
+    {
+      source: "claude-code" as const,
+      listId: "list",
+      id: "1",
+      subject: "A",
+      status: "pending" as const,
+      activeForm: null,
+      blockedBy: [],
+      owner: null,
+      repo: "demo-repo",
+      branch: "cursor/1-slug",
+      issue: null,
+      updatedAt: "2026-01-20T00:00:00Z",
+    },
+    {
+      source: "claude-code" as const,
+      listId: "list",
+      id: "2",
+      subject: "B",
+      status: "in_progress" as const,
+      activeForm: "Running tests",
+      blockedBy: [],
+      owner: null,
+      repo: "demo-repo",
+      branch: "cursor/1-slug",
+      issue: null,
+      updatedAt: "2026-01-20T00:00:00Z",
+    },
+  ];
+  const rows = buildRows(cfg, [branch({ name: "cursor/1-slug", ahead: 2 })], NOW, [], [], tasks);
+  const row = rows[0]!;
+  assert.equal(row.tasks.length, 2);
+  assert.ok(row.flags.includes("Tasks open"));
+  assert.equal(taskColumnLabel(row.tasks), "Running tests");
+  assert.equal(summaryCounts(rows)["Tasks open"], 2);
+
+  const done = buildRows(
+    cfg,
+    [branch({ name: "merged-one", prs: [pr("MERGED")], ahead: 0 })],
+    NOW,
+    [],
+    [],
+    [
+      {
+        ...tasks[0]!,
+        branch: "merged-one",
+        status: "completed",
+      },
+    ],
+  );
+  // Fully completed lists are filtered by the collector; a lone completed task still attached shows no flag.
+  assert.equal(done[0]?.flags.includes("Tasks open"), false);
+  assert.equal(inInbox(done[0]!, 7), false);
 });

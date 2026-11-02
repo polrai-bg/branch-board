@@ -14,6 +14,6 @@ export function GET() {
     errors: snap.errors,
     hideMergedByDefault: cfg.hideMergedByDefault,
     staleDays: cfg.staleDays,
-    rows: buildRows(cfg, snap.branches, Date.now(), snap.locals, snap.issues),
+    rows: buildRows(cfg, snap.branches, Date.now(), snap.locals, snap.issues, snap.tasks),
   });
 }

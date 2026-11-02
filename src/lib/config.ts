@@ -5,6 +5,8 @@ import { DEFAULT_ISSUE_PATTERN } from "./merge.ts";
 
 export type BranchOverride = { repo: string; branch: string; agent?: string; ignore?: boolean; issue?: number };
 
+export type TaskListBinding = { list: string; repo: string; branch: string };
+
 export type Config = {
   github: { owner: string };
   repos: { name: string; localPath: string | null; bases: string[] }[];
@@ -16,6 +18,9 @@ export type Config = {
   staleDays: number;
   stalledReviewDays: number;
   hideMergedByDefault: boolean;
+  // null turns Claude Code task reading off. undefined uses ~/.claude or CLAUDE_CONFIG_DIR.
+  claudeConfigDir: string | null;
+  taskLists: TaskListBinding[];
 };
 
 export const CONFIG_FILE = "branchboard.config.json";
@@ -31,6 +36,8 @@ type Raw = {
   staleDays?: number;
   stalledReviewDays?: number;
   hideMergedByDefault?: boolean;
+  claudeConfigDir?: string | null;
+  taskLists?: { list?: string; repo?: string; branch?: string }[];
 };
 
 // Read on every refresh so edits apply without a restart. Never falls back to defaults for owner or repos.
@@ -52,6 +59,20 @@ export function configFromRaw(raw: Raw): Config {
   } catch {
     throw new Error(`${CONFIG_FILE} issuePattern is not a valid regular expression.`);
   }
+  const taskLists: TaskListBinding[] = [];
+  if (Array.isArray(raw.taskLists)) {
+    for (const entry of raw.taskLists) {
+      if (!entry || typeof entry.list !== "string" || !entry.list) continue;
+      if (typeof entry.repo !== "string" || !entry.repo) continue;
+      if (typeof entry.branch !== "string" || !entry.branch) continue;
+      taskLists.push({ list: entry.list, repo: entry.repo, branch: entry.branch });
+    }
+  }
+  let claudeConfigDir: string | null;
+  if (raw.claudeConfigDir === null) claudeConfigDir = null;
+  else if (typeof raw.claudeConfigDir === "string") claudeConfigDir = raw.claudeConfigDir.replace(/^~(?=\/|$)/, homedir());
+  else claudeConfigDir = (process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")).replace(/^~(?=\/|$)/, homedir());
+
   return {
     github: { owner: raw.github.owner },
     repos: raw.repos.map((repo) => ({
@@ -73,5 +94,7 @@ export function configFromRaw(raw: Raw): Config {
     staleDays: raw.staleDays ?? 7,
     stalledReviewDays: raw.stalledReviewDays ?? 3,
     hideMergedByDefault: raw.hideMergedByDefault ?? true,
+    claudeConfigDir,
+    taskLists,
   };
 }

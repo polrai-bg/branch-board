@@ -14,6 +14,7 @@ export type PR = {
   // Newest of this and the branch tip is "review activity" for Stalled review.
   // GitHub moves updatedAt on pushes, reviews, comments, and edits.
   updatedAt?: string | null;
+  body?: string | null;
   closingIssues?: ClosingIssue[];
 };
 
@@ -49,9 +50,31 @@ export type LocalRecord = {
   baseGuessed: boolean;
 };
 
-export type IssueInfo = { repo: string; number: number; title: string; state: "OPEN" | "CLOSED" };
+export type IssueInfo = {
+  repo: string;
+  number: number;
+  title: string;
+  state: "OPEN" | "CLOSED";
+  body?: string | null;
+  updatedAt?: string | null;
+};
 
 export type IssueLink = { number: number; title: string | null; state: "OPEN" | "CLOSED" | null };
+
+export type TaskItem = {
+  source: "claude-code" | "issue" | "pr";
+  listId: string;
+  id: string;
+  subject: string;
+  status: "pending" | "in_progress" | "completed";
+  activeForm: string | null;
+  blockedBy: string[];
+  owner: string | null;
+  repo: string | null;
+  branch: string | null;
+  issue: number | null;
+  updatedAt: string;
+};
 
 export type Where = "GitHub" | "Local" | "Both";
 
@@ -59,7 +82,7 @@ export type Status = "Conflicts" | "Unsaved" | "Unpushed" | "Local only" | "WIP"
 
 export const STATUS_ORDER: Status[] = ["Conflicts", "Unsaved", "Unpushed", "Local only", "WIP", "Open PR", "Empty", "Merged", "Base"];
 
-export const FLAG_ORDER = ["Orphan", "Overlap", "Possible duplicate", "Stalled review", "Stale", "Issue closed"] as const;
+export const FLAG_ORDER = ["Orphan", "Overlap", "Possible duplicate", "Stalled review", "Stale", "Issue closed", "Tasks open"] as const;
 
 export type Flag = (typeof FLAG_ORDER)[number];
 
@@ -68,7 +91,7 @@ const UNFINISHED_LIST = ["Unsaved", "Unpushed", "Local only"] as const satisfies
 export const UNFINISHED_STATUSES: readonly Status[] = UNFINISHED_LIST;
 
 // Metrics stored once per day. Chip totals are the sum across repos.
-export const COUNT_METRICS = ["Orphan", "Overlap", "Stalled review", "Stale", "Issue closed", "Unfinished local", "Empty"] as const;
+export const COUNT_METRICS = ["Orphan", "Overlap", "Stalled review", "Stale", "Issue closed", "Unfinished local", "Empty", "Tasks open"] as const;
 
 export type StatusInput = {
   prs: PR[];
@@ -95,7 +118,20 @@ export type Row = RemoteBranch & {
   unpushed: number;
   neverPushed: boolean;
   detached: boolean;
+  tasks: TaskItem[];
 };
+
+export function openTasks(tasks: readonly TaskItem[]): TaskItem[] {
+  return tasks.filter((task) => task.status !== "completed");
+}
+
+export function taskColumnLabel(tasks: readonly TaskItem[]): string {
+  const open = openTasks(tasks);
+  if (open.length === 0) return "";
+  const active = open.find((task) => task.status === "in_progress" && task.activeForm);
+  if (active?.activeForm) return active.activeForm;
+  return `${open.length} of ${tasks.length}`;
+}
 
 const AUTHOR_AGENTS: Record<string, string> = {
   "cursor-agent": "Cursor",
@@ -298,7 +334,12 @@ function overlapKeys(rows: { repo: string; status: Status; issue: IssueLink | nu
   return keys;
 }
 
-function flagsFor(cfg: Config, row: { name: string; status: Status; issue: IssueLink | null; daysAgo: number; committedDate: string; prs: PR[] }, overlap: boolean, now: number): Flag[] {
+function flagsFor(
+  cfg: Config,
+  row: { name: string; status: Status; issue: IssueLink | null; daysAgo: number; committedDate: string; prs: PR[]; tasks: TaskItem[] },
+  overlap: boolean,
+  now: number,
+): Flag[] {
   if (row.status === "Base") return [];
   const flags: Flag[] = [];
   const exempt = (cfg.exemptPrefixes ?? []).filter(Boolean).some((prefix) => row.name.startsWith(prefix));
@@ -310,6 +351,7 @@ function flagsFor(cfg: Config, row: { name: string; status: Status; issue: Issue
   }
   if (row.status === "WIP" && row.daysAgo >= cfg.staleDays) flags.push("Stale");
   if (row.issue?.state === "CLOSED" && row.status !== "Merged") flags.push("Issue closed");
+  if (openTasks(row.tasks).length > 0) flags.push("Tasks open");
   return flags;
 }
 
@@ -346,7 +388,29 @@ function isConfiguredBase(cfg: Config, repo: string, name: string): boolean {
   return cfg.repos.some((item) => item.name === repo && item.bases.includes(name));
 }
 
-export function buildRows(cfg: Config, remotes: RemoteBranch[], now = Date.now(), locals: LocalRecord[] = [], issues: IssueInfo[] = []): Row[] {
+function tasksForRow(tasks: TaskItem[], repo: string, branch: string, issueNumber: number | null): TaskItem[] {
+  const seen = new Set<string>();
+  const matched: TaskItem[] = [];
+  for (const task of tasks) {
+    const byBranch = task.repo === repo && task.branch === branch;
+    const byIssue = task.source === "issue" && issueNumber != null && task.repo === repo && task.issue === issueNumber;
+    if (!byBranch && !byIssue) continue;
+    const key = `${task.source}\0${task.listId}\0${task.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    matched.push(task);
+  }
+  return matched;
+}
+
+export function buildRows(
+  cfg: Config,
+  remotes: RemoteBranch[],
+  now = Date.now(),
+  locals: LocalRecord[] = [],
+  issues: IssueInfo[] = [],
+  tasks: TaskItem[] = [],
+): Row[] {
   const known = new Map(issues.map((issue) => [`${issue.repo}#${issue.number}`, issue]));
   const draft = join(remotes, locals)
     .filter((item) => !cfg.branchOverrides.some((o) => o.repo === item.repo && o.branch === item.name && o.ignore))
@@ -360,6 +424,7 @@ export function buildRows(cfg: Config, remotes: RemoteBranch[], now = Date.now()
       const hit = number == null ? undefined : known.get(`${source.repo}#${number}`);
       const issue: IssueLink | null = number == null ? null : { number, title: hit?.title ?? null, state: hit?.state ?? null };
       const status = isBase ? "Base" : statusOf(source);
+      const rowTasks = isBase ? [] : tasksForRow(tasks, source.repo, source.name, number);
       return {
         ...source,
         agent: detectAgent(cfg, source),
@@ -370,6 +435,7 @@ export function buildRows(cfg: Config, remotes: RemoteBranch[], now = Date.now()
         issue,
         attempt: attemptId(item.name),
         flags: [] as Flag[],
+        tasks: rowTasks,
       };
     });
   const overlapped = overlapKeys(draft);
@@ -425,22 +491,50 @@ export function duplicateKeys(rows: { repo: string; name: string; agent: string;
   return keys;
 }
 
-export function inInbox(row: { status: Status; flags: readonly Flag[]; dirty: boolean; localPath: string | null; daysAgo: number }, staleDays: number): boolean {
+export function inInbox(
+  row: { status: Status; flags: readonly Flag[]; dirty: boolean; localPath: string | null; daysAgo: number; tasks?: readonly TaskItem[] },
+  staleDays: number,
+): boolean {
   // A dirty checkout is work on this Mac even when the branch is main.
   if (row.localPath && row.dirty) return true;
+  // A merged branch whose checklist is still open is not done yet.
+  if (row.status === "Merged" && openTasks(row.tasks ?? []).length > 0) return true;
   if (row.status === "Merged" || row.status === "Base") return false;
   if (row.status === "Conflicts" || row.status === "Local only" || row.status === "Unsaved" || row.status === "Unpushed") return true;
   if (row.localPath && row.dirty) return true;
   if (row.flags.includes("Possible duplicate")) return true;
+  if (row.flags.includes("Tasks open")) return true;
   return row.daysAgo >= staleDays;
 }
 
 export function summaryCounts(rows: Row[]): Record<string, number> {
   const counts: Record<string, number> = {};
-  for (const flag of FLAG_ORDER) counts[flag] = rows.filter((row) => row.flags.includes(flag)).length;
+  for (const flag of FLAG_ORDER) {
+    if (flag === "Tasks open") continue;
+    counts[flag] = rows.filter((row) => row.flags.includes(flag)).length;
+  }
+  // Unique open tasks across rows (an issue checklist on two branches counts once).
+  const seen = new Set<string>();
+  for (const row of rows) {
+    for (const task of openTasks(row.tasks)) seen.add(`${task.source}\0${task.listId}\0${task.id}`);
+  }
+  counts["Tasks open"] = seen.size;
   counts["Unfinished local"] = rows.filter((row) => UNFINISHED_STATUSES.includes(row.status)).length;
   for (const status of STATUS_ORDER) counts[status] = rows.filter((row) => row.status === status).length;
   return counts;
+}
+
+// Flat open tasks for the Tasks view, grouped later by the page.
+export function openTaskIndex(tasks: TaskItem[]): TaskItem[] {
+  return openTasks(tasks).slice().sort((a, b) => {
+    const repoA = a.repo ?? "\uffff";
+    const repoB = b.repo ?? "\uffff";
+    if (repoA !== repoB) return repoA.localeCompare(repoB);
+    const branchA = a.branch ?? "\uffff";
+    const branchB = b.branch ?? "\uffff";
+    if (branchA !== branchB) return branchA.localeCompare(branchB);
+    return a.subject.localeCompare(b.subject);
+  });
 }
 
 export function countsByRepo(rows: Row[], repos: string[]): { repo: string; metric: string; count: number }[] {

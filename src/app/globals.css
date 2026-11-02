@@ -205,6 +205,59 @@ select {
   flex: none;
 }
 
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--bar);
+  border-bottom: 1px solid var(--separator);
+}
+
+.chip {
+  appearance: none;
+  border: 1px solid var(--separator);
+  background: var(--control);
+  color: var(--secondary);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.chip .n {
+  margin-left: 6px;
+  color: var(--tertiary);
+}
+
+.chip.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.tasks-view {
+  padding: 12px 16px 24px;
+  overflow: auto;
+}
+
+.task-group {
+  margin: 0 0 18px;
+}
+
+.task-group h2 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--secondary);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.task-group ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
 .alert {
   flex: none;
   padding: 8px 14px;
@@ -298,6 +351,74 @@ tbody tr:not(.group):hover td {
 
 .done {
   margin-left: 8px;
+}
+
+.graph {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 16px 16px 32px;
+}
+
+.graph-repo {
+  background: var(--surface);
+  border: 1px solid var(--separator);
+  border-radius: 12px;
+  padding: 12px 14px 8px;
+}
+
+.graph-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--label);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.graph-title .n {
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.lane {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+}
+
+.lane-mark {
+  width: 72px;
+  height: 36px;
+  flex: none;
+}
+
+.lane-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.pill {
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--secondary);
+  font-size: 11px;
+  padding: 1px 7px;
 }
 
 .cards {

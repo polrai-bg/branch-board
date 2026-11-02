@@ -33,6 +33,8 @@ const cfg: Config = {
   staleDays: 7,
   stalledReviewDays: 3,
   hideMergedByDefault: true,
+  claudeConfigDir: null,
+  taskLists: [],
 };
 
 test("worktree parser skips prunable and missing folders", () => {

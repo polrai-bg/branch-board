@@ -2,17 +2,41 @@ import { mergeCollections } from "./assemble.ts";
 import { localDay, readSnapshot, writeDailyCounts, writeSnapshot, type Snapshot } from "./cache.ts";
 import { loadConfig } from "./config.ts";
 import { collectRepo } from "./github.ts";
-import { collectLocal } from "./local.ts";
-import { buildRows, countsByRepo } from "./merge.ts";
+import { collectLocal, defaultGit, parseWorktrees, liveWorktrees } from "./local.ts";
+import { buildRows, countsByRepo, type TaskItem } from "./merge.ts";
+import { checklistTasksFromSnapshot } from "./tasks.ts";
+import { buildPathToRepo, collectClaudeTasks } from "./tasks-claude.ts";
 
 // globalThis so route handlers and the instrumentation hook share one in-flight refresh and one timer.
-const g = globalThis as unknown as { bbRefresh?: Promise<Snapshot>; bbTimer?: NodeJS.Timeout };
+const g = globalThis as unknown as {
+  bbRefresh?: Promise<Snapshot>;
+  bbTimer?: NodeJS.Timeout;
+  bbTaskCache?: Map<string, { mtimeMs: number; tasks: TaskItem[]; errors: string[] }>;
+};
 
 export function refresh(): Promise<Snapshot> {
   g.bbRefresh ??= run().finally(() => {
     g.bbRefresh = undefined;
   });
   return g.bbRefresh;
+}
+
+async function worktreePaths(repos: { name: string; localPath: string | null }[]): Promise<{ repo: string; path: string }[]> {
+  const git = defaultGit();
+  const out: { repo: string; path: string }[] = [];
+  for (const repo of repos) {
+    if (!repo.localPath) continue;
+    try {
+      const listed = await git(["worktree", "list", "--porcelain"], repo.localPath);
+      if (listed.code !== 0) continue;
+      for (const tree of liveWorktrees(parseWorktrees(listed.stdout))) {
+        out.push({ repo: repo.name, path: tree.path });
+      }
+    } catch {
+      // A missing folder is already reported by the local collector.
+    }
+  }
+  return out;
 }
 
 async function run(): Promise<Snapshot> {
@@ -48,9 +72,43 @@ async function run(): Promise<Snapshot> {
 
     const merged = mergeCollections(cfg.repos, prev, remoteResults, localScans);
     errors.push(...merged.errors);
-    const rows = buildRows(cfg, merged.branches, Date.now(), merged.locals, merged.issues);
-    writeDailyCounts(localDay(), countsByRepo(rows, cfg.repos.map((repo) => repo.name)));
-    const snap: Snapshot = { takenAt: new Date().toISOString(), branches: merged.branches, locals: merged.locals, issues: merged.issues, errors };
+
+    const checklist = checklistTasksFromSnapshot(merged.branches, merged.issues);
+    let claudeTasks: TaskItem[] = [];
+    // Config already resolved the default (~/.claude). null means the Claude source is off.
+    const claudeDir = cfg.claudeConfigDir;
+    if (claudeDir) {
+      try {
+        const trees = await worktreePaths(cfg.repos);
+        g.bbTaskCache ??= new Map();
+        const scan = collectClaudeTasks({
+          claudeConfigDir: claudeDir,
+          taskLists: cfg.taskLists,
+          pathToRepo: buildPathToRepo(cfg.repos, trees),
+          cache: g.bbTaskCache,
+        });
+        claudeTasks = scan.tasks;
+        for (const message of scan.errors) errors.push({ message: `Claude tasks: ${message}` });
+      } catch (error) {
+        errors.push({ message: `Claude tasks: ${(error as Error).message}` });
+        claudeTasks = prev.tasks.filter((task) => task.source === "claude-code");
+      }
+    }
+
+    const tasks = [...claudeTasks, ...checklist];
+    const rows = buildRows(cfg, merged.branches, Date.now(), merged.locals, merged.issues, tasks);
+    writeDailyCounts(
+      localDay(),
+      countsByRepo(rows, cfg.repos.map((repo) => repo.name)),
+    );
+    const snap: Snapshot = {
+      takenAt: new Date().toISOString(),
+      branches: merged.branches,
+      locals: merged.locals,
+      issues: merged.issues,
+      tasks,
+      errors,
+    };
     writeSnapshot(snap);
     if (errors.length) console.error("[branch-board] refresh errors:", errors.map((error) => error.message).join("; "));
     return snap;

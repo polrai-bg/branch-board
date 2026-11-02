@@ -58,12 +58,31 @@ Flags sit next to the status and can stack.
 | Stalled review | Open PR with no new commit or PR activity in `stalledReviewDays` (default 3) |
 | Stale | WIP with no commits in `staleDays` (default 7) |
 | Issue closed | The linked issue is closed and the branch is not merged |
+| Tasks open | The row has at least one incomplete task from Claude Code or a checklist |
 
 A branch's issue is the first of: a `branchOverrides` entry with `issue`, the PR's closing reference in the same repo, `issuePattern` on the branch name, then `#123` in the newest commit message. The message counts only when the branch has commits of its own: an untouched branch's newest commit belongs to its base, so a squash message like `Title (#21)` there does not link it.
 
+## Tasks
+
+The board reads task lists that agents already write. It does not become a second tracker.
+
+| Source | What it reads |
+| --- | --- |
+| Claude Code | Task files under `claudeConfigDir/tasks/` (default `~/.claude`). A session list is tied to a repo and branch through the session transcript's `cwd` and `gitBranch`. |
+| Linked issues and PRs | Checkbox lines under `Acceptance criteria` or `Remaining work`. Checkboxes under `Reuse check` are ignored. The newest `## Handoff` comment is included for issues with an unmerged branch. |
+
+Cursor to-dos are not read from disk. Cursor work reaches the board through the issue checklist.
+
+Optional config:
+
+- `claudeConfigDir`: folder that contains `tasks/` and `projects/`. Defaults to `~/.claude`, or `CLAUDE_CONFIG_DIR`. Set to `null` to turn the Claude Code source off.
+- `taskLists`: ties a named shared list (no transcript) to a repo and branch.
+
+The table has a Tasks column (`2 of 5`, or the in-progress `activeForm`). Row detail lists each task with a source tag. View: Tasks groups open tasks by repo then branch. A Merged row with open tasks gets the Tasks open flag and stays in the inbox.
+
 ## Daily counts
 
-Each refresh stores that day's flag counts, per repo, in `.branchboard/cache.db`. The last refresh of the day replaces that day's rows. Read them at `/api/counts` or with `npm run counts`.
+Each refresh stores that day's flag counts, per repo, in `.branchboard/cache.db`. The last refresh of the day replaces that day's rows. Read them at `/api/counts` or with `npm run counts`. The Tasks open metric is the number of unique open tasks.
 
 For branches with no PR, the base is guessed: the configured base with the fewest commits between it and the branch tip wins. Those rows say "guessed".
 

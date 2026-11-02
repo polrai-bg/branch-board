@@ -2,13 +2,14 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { IssueInfo, LocalRecord, RemoteBranch } from "./merge.ts";
+import type { IssueInfo, LocalRecord, RemoteBranch, TaskItem } from "./merge.ts";
 
 export type Snapshot = {
   takenAt: string | null;
   branches: RemoteBranch[];
   locals: LocalRecord[];
   issues: IssueInfo[];
+  tasks: TaskItem[];
   errors: { message: string; setup?: boolean }[];
 };
 
@@ -22,20 +23,21 @@ export type CacheStore = {
   close: () => void;
 };
 
-type SnapshotRow = { taken_at: string; branches: string; errors: string; locals: string | null; issues: string | null };
+type SnapshotRow = { taken_at: string; branches: string; errors: string; locals: string | null; issues: string | null; tasks: string | null };
 
 function migrate(database: Database.Database) {
   database.exec("CREATE TABLE IF NOT EXISTS snapshot (id INTEGER PRIMARY KEY CHECK (id = 1), taken_at TEXT, branches TEXT, errors TEXT)");
   const columns = database.prepare("PRAGMA table_info(snapshot)").all() as { name: string }[];
   if (!columns.some((column) => column.name === "locals")) database.exec("ALTER TABLE snapshot ADD COLUMN locals TEXT");
   if (!columns.some((column) => column.name === "issues")) database.exec("ALTER TABLE snapshot ADD COLUMN issues TEXT");
+  if (!columns.some((column) => column.name === "tasks")) database.exec("ALTER TABLE snapshot ADD COLUMN tasks TEXT");
   database.exec(
     "CREATE TABLE IF NOT EXISTS daily_counts (day TEXT NOT NULL, repo TEXT NOT NULL, metric TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (day, repo, metric))",
   );
 }
 
 function emptySnapshot(): Snapshot {
-  return { takenAt: null, branches: [], locals: [], issues: [], errors: [] };
+  return { takenAt: null, branches: [], locals: [], issues: [], tasks: [], errors: [] };
 }
 
 export function createCache(file: string): CacheStore {
@@ -43,7 +45,7 @@ export function createCache(file: string): CacheStore {
   migrate(database);
   return {
     readSnapshot() {
-      const row = database.prepare("SELECT taken_at, branches, errors, locals, issues FROM snapshot WHERE id = 1").get() as SnapshotRow | undefined;
+      const row = database.prepare("SELECT taken_at, branches, errors, locals, issues, tasks FROM snapshot WHERE id = 1").get() as SnapshotRow | undefined;
       if (!row) return emptySnapshot();
       return {
         takenAt: row.taken_at,
@@ -51,12 +53,20 @@ export function createCache(file: string): CacheStore {
         errors: JSON.parse(row.errors),
         locals: row.locals ? JSON.parse(row.locals) : [],
         issues: row.issues ? JSON.parse(row.issues) : [],
+        tasks: row.tasks ? JSON.parse(row.tasks) : [],
       };
     },
     writeSnapshot(snapshot) {
       database
-        .prepare("INSERT OR REPLACE INTO snapshot (id, taken_at, branches, errors, locals, issues) VALUES (1, ?, ?, ?, ?, ?)")
-        .run(snapshot.takenAt, JSON.stringify(snapshot.branches), JSON.stringify(snapshot.errors), JSON.stringify(snapshot.locals), JSON.stringify(snapshot.issues));
+        .prepare("INSERT OR REPLACE INTO snapshot (id, taken_at, branches, errors, locals, issues, tasks) VALUES (1, ?, ?, ?, ?, ?, ?)")
+        .run(
+          snapshot.takenAt,
+          JSON.stringify(snapshot.branches),
+          JSON.stringify(snapshot.errors),
+          JSON.stringify(snapshot.locals),
+          JSON.stringify(snapshot.issues),
+          JSON.stringify(snapshot.tasks),
+        );
     },
     writeDailyCounts(day, entries) {
       const replace = database.transaction(() => {
