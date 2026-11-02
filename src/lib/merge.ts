@@ -76,6 +76,17 @@ export type TaskItem = {
   updatedAt: string;
 };
 
+export type AgentSession = {
+  sessionId: string;
+  state: string;
+  summary: string | null;
+  cwd: string | null;
+  prUrl: string | null;
+  repo: string | null;
+  branch: string | null;
+  updatedAt: string;
+};
+
 export type Where = "GitHub" | "Local" | "Both";
 
 export type Status = "Conflicts" | "Unsaved" | "Unpushed" | "Local only" | "WIP" | "Open PR" | "Empty" | "Merged" | "Base";
@@ -119,6 +130,7 @@ export type Row = RemoteBranch & {
   neverPushed: boolean;
   detached: boolean;
   tasks: TaskItem[];
+  sessions: AgentSession[];
 };
 
 export function openTasks(tasks: readonly TaskItem[]): TaskItem[] {
@@ -403,6 +415,10 @@ function tasksForRow(tasks: TaskItem[], repo: string, branch: string, issueNumbe
   return matched;
 }
 
+function sessionsForRow(sessions: AgentSession[], repo: string, branch: string): AgentSession[] {
+  return sessions.filter((session) => session.repo === repo && session.branch === branch);
+}
+
 export function buildRows(
   cfg: Config,
   remotes: RemoteBranch[],
@@ -410,6 +426,7 @@ export function buildRows(
   locals: LocalRecord[] = [],
   issues: IssueInfo[] = [],
   tasks: TaskItem[] = [],
+  sessions: AgentSession[] = [],
 ): Row[] {
   const known = new Map(issues.map((issue) => [`${issue.repo}#${issue.number}`, issue]));
   const draft = join(remotes, locals)
@@ -425,6 +442,7 @@ export function buildRows(
       const issue: IssueLink | null = number == null ? null : { number, title: hit?.title ?? null, state: hit?.state ?? null };
       const status = isBase ? "Base" : statusOf(source);
       const rowTasks = isBase ? [] : tasksForRow(tasks, source.repo, source.name, number);
+      const rowSessions = isBase ? [] : sessionsForRow(sessions, source.repo, source.name);
       return {
         ...source,
         agent: detectAgent(cfg, source),
@@ -436,6 +454,7 @@ export function buildRows(
         attempt: attemptId(item.name),
         flags: [] as Flag[],
         tasks: rowTasks,
+        sessions: rowSessions,
       };
     });
   const overlapped = overlapKeys(draft);
@@ -491,8 +510,20 @@ export function duplicateKeys(rows: { repo: string; name: string; agent: string;
   return keys;
 }
 
+export function sessionNeedsInput(sessions: readonly AgentSession[] | undefined): boolean {
+  return (sessions ?? []).some((session) => session.state === "Needs input");
+}
+
 export function inInbox(
-  row: { status: Status; flags: readonly Flag[]; dirty: boolean; localPath: string | null; daysAgo: number; tasks?: readonly TaskItem[] },
+  row: {
+    status: Status;
+    flags: readonly Flag[];
+    dirty: boolean;
+    localPath: string | null;
+    daysAgo: number;
+    tasks?: readonly TaskItem[];
+    sessions?: readonly AgentSession[];
+  },
   staleDays: number,
 ): boolean {
   // A dirty checkout is work on this Mac even when the branch is main.
@@ -504,6 +535,8 @@ export function inInbox(
   if (row.localPath && row.dirty) return true;
   if (row.flags.includes("Possible duplicate")) return true;
   if (row.flags.includes("Tasks open")) return true;
+  // An agent session waiting on input belongs in the inbox.
+  if (sessionNeedsInput(row.sessions)) return true;
   return row.daysAgo >= staleDays;
 }
 

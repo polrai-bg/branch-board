@@ -404,6 +404,31 @@ test("different agents with the same branch slug are possible duplicates", () =>
     ),
     true,
   );
+  assert.equal(
+    inInbox(
+      {
+        status: "WIP",
+        flags: [],
+        dirty: false,
+        localPath: null,
+        daysAgo: 0,
+        sessions: [
+          {
+            sessionId: "s1",
+            state: "Needs input",
+            summary: "Waiting on a choice",
+            cwd: "/tmp/demo-checkout",
+            prUrl: null,
+            repo: "demo-repo",
+            branch: "feature-x",
+            updatedAt: "2026-01-20T00:00:00Z",
+          },
+        ],
+      },
+      7,
+    ),
+    true,
+  );
 });
 
 test("Tasks open flag, column label, and metric", () => {

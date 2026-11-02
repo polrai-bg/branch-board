@@ -70,6 +70,7 @@ The board reads task lists that agents already write. It does not become a secon
 | --- | --- |
 | Claude Code | Task files under `claudeConfigDir/tasks/` (default `~/.claude`). A session list is tied to a repo and branch through the session transcript's `cwd` and `gitBranch`. |
 | Linked issues and PRs | Checkbox lines under `Acceptance criteria` or `Remaining work`. Checkboxes under `Reuse check` are ignored. The newest `## Handoff` comment is included for issues with an unmerged branch. |
+| Claude sessions | When `claude` is on the PATH, each refresh runs `claude agents --json` (10s timeout). Row detail shows the session state and summary. A session in Needs input puts its row in the inbox. |
 
 Cursor to-dos are not read from disk. Cursor work reaches the board through the issue checklist.
 

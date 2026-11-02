@@ -1,9 +1,10 @@
+import { collectClaudeAgents, buildPathToBranch } from "./agents-claude.ts";
 import { mergeCollections } from "./assemble.ts";
 import { localDay, readSnapshot, writeDailyCounts, writeSnapshot, type Snapshot } from "./cache.ts";
 import { loadConfig } from "./config.ts";
 import { collectRepo } from "./github.ts";
 import { collectLocal, defaultGit, parseWorktrees, liveWorktrees } from "./local.ts";
-import { buildRows, countsByRepo, type TaskItem } from "./merge.ts";
+import { buildRows, countsByRepo, type AgentSession, type TaskItem } from "./merge.ts";
 import { checklistTasksFromSnapshot } from "./tasks.ts";
 import { buildPathToRepo, collectClaudeTasks } from "./tasks-claude.ts";
 
@@ -21,16 +22,16 @@ export function refresh(): Promise<Snapshot> {
   return g.bbRefresh;
 }
 
-async function worktreePaths(repos: { name: string; localPath: string | null }[]): Promise<{ repo: string; path: string }[]> {
+async function worktreeInfos(repos: { name: string; localPath: string | null }[]): Promise<{ repo: string; path: string; branch: string | null }[]> {
   const git = defaultGit();
-  const out: { repo: string; path: string }[] = [];
+  const out: { repo: string; path: string; branch: string | null }[] = [];
   for (const repo of repos) {
     if (!repo.localPath) continue;
     try {
       const listed = await git(["worktree", "list", "--porcelain"], repo.localPath);
       if (listed.code !== 0) continue;
       for (const tree of liveWorktrees(parseWorktrees(listed.stdout))) {
-        out.push({ repo: repo.name, path: tree.path });
+        out.push({ repo: repo.name, path: tree.path, branch: tree.branch });
       }
     } catch {
       // A missing folder is already reported by the local collector.
@@ -73,18 +74,24 @@ async function run(): Promise<Snapshot> {
     const merged = mergeCollections(cfg.repos, prev, remoteResults, localScans);
     errors.push(...merged.errors);
 
+    const trees = await worktreeInfos(cfg.repos);
+    const pathToRepo = buildPathToRepo(
+      cfg.repos,
+      trees.map((tree) => ({ repo: tree.repo, path: tree.path })),
+    );
+    const pathToBranch = buildPathToBranch(merged.locals, trees);
+
     const checklist = checklistTasksFromSnapshot(merged.branches, merged.issues);
     let claudeTasks: TaskItem[] = [];
     // Config already resolved the default (~/.claude). null means the Claude source is off.
     const claudeDir = cfg.claudeConfigDir;
     if (claudeDir) {
       try {
-        const trees = await worktreePaths(cfg.repos);
         g.bbTaskCache ??= new Map();
         const scan = collectClaudeTasks({
           claudeConfigDir: claudeDir,
           taskLists: cfg.taskLists,
-          pathToRepo: buildPathToRepo(cfg.repos, trees),
+          pathToRepo,
           cache: g.bbTaskCache,
         });
         claudeTasks = scan.tasks;
@@ -95,11 +102,32 @@ async function run(): Promise<Snapshot> {
       }
     }
 
+    let sessions: AgentSession[] = [];
+    try {
+      const agents = await collectClaudeAgents({
+        pathToRepo,
+        pathToBranch,
+        claudeConfigDir: claudeDir,
+      });
+      if (agents.error) {
+        errors.push({ message: agents.error });
+        sessions = prev.sessions;
+      } else if (!agents.skipped) {
+        sessions = agents.sessions;
+      }
+    } catch (error) {
+      errors.push({ message: `Claude agents: ${(error as Error).message}` });
+      sessions = prev.sessions;
+    }
+
     const tasks = [...claudeTasks, ...checklist];
-    const rows = buildRows(cfg, merged.branches, Date.now(), merged.locals, merged.issues, tasks);
+    const rows = buildRows(cfg, merged.branches, Date.now(), merged.locals, merged.issues, tasks, sessions);
     writeDailyCounts(
       localDay(),
-      countsByRepo(rows, cfg.repos.map((repo) => repo.name)),
+      countsByRepo(
+        rows,
+        cfg.repos.map((repo) => repo.name),
+      ),
     );
     const snap: Snapshot = {
       takenAt: new Date().toISOString(),
@@ -107,6 +135,7 @@ async function run(): Promise<Snapshot> {
       locals: merged.locals,
       issues: merged.issues,
       tasks,
+      sessions,
       errors,
     };
     writeSnapshot(snap);

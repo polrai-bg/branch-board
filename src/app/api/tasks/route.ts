@@ -15,7 +15,7 @@ export type TaskGroup = {
 export function GET() {
   const cfg = loadConfig();
   const snap = readSnapshot();
-  const rows = buildRows(cfg, snap.branches, Date.now(), snap.locals, snap.issues, snap.tasks);
+  const rows = buildRows(cfg, snap.branches, Date.now(), snap.locals, snap.issues, snap.tasks, snap.sessions);
   const rowByKey = new Map(rows.map((row) => [`${row.repo}\0${row.name}`, row]));
 
   const attached = new Set<string>();

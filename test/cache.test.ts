@@ -25,6 +25,7 @@ test("daily counts: last write for the day wins, and an old snapshot still opens
     assert.deepEqual(opened.locals, []);
     assert.deepEqual(opened.issues, []);
     assert.deepEqual(opened.tasks, []);
+    assert.deepEqual(opened.sessions, []);
 
     cache.writeDailyCounts("2026-01-20", [{ repo: "demo-repo", metric: "Orphan", count: 4 }]);
     cache.writeDailyCounts("2026-01-20", [

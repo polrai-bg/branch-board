@@ -909,6 +909,29 @@ export default function Board() {
                               </ul>
                             </>
                           )}
+                          {row.sessions.length > 0 && (
+                            <>
+                              <p>Claude sessions</p>
+                              <ul>
+                                {row.sessions.map((session) => (
+                                  <li key={session.sessionId}>
+                                    <span className="branch">{session.state}</span>
+                                    {session.summary ? ` ${session.summary}` : ""}
+                                    <span className="meta">
+                                      {session.prUrl ? (
+                                        <>
+                                          {" "}
+                                          <a className="go" href={session.prUrl} target="_blank" rel="noreferrer">
+                                            PR
+                                          </a>
+                                        </>
+                                      ) : null}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </>
+                          )}
                           <pre>{JSON.stringify(row, null, 2)}</pre>
                         </td>
                       </tr>,

@@ -1,10 +1,24 @@
 // Read Claude Code task lists on this Mac. Pure helpers take strings so tests use fixtures.
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, openSync, readFileSync, readSync, readdirSync, realpathSync, closeSync, fstatSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { TaskItem } from "./merge.ts";
 
 export const TRANSCRIPT_TAIL_BYTES = 64 * 1024;
+
+export function readFileTail(path: string, bytes: number): string {
+  const fd = openSync(path, "r");
+  try {
+    const size = fstatSync(fd).size;
+    const length = Math.min(bytes, size);
+    const start = Math.max(0, size - length);
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, start);
+    return buffer.toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
 
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -34,10 +48,7 @@ const defaultFs: ClaudeFs = {
   exists: existsSync,
   listDir: (path) => readdirSync(path),
   readText: (path) => readFileSync(path, "utf8"),
-  readTail: (path, bytes) => {
-    const full = readFileSync(path);
-    return full.subarray(Math.max(0, full.length - bytes)).toString("utf8");
-  },
+  readTail: readFileTail,
   mtimeMs: (path) => statSync(path).mtimeMs,
   realpath: (path) => realpathSync(path),
 };
