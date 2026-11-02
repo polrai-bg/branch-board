@@ -95,12 +95,12 @@ function taskStatusLabel(task: TaskItem): string {
 
 function TasksList({
   groups,
-  furled,
+  openKeys,
   onToggle,
   owner,
 }: {
   groups: TaskGroup[];
-  furled: Set<string>;
+  openKeys: Set<string>;
   onToggle: (key: string) => void;
   owner: string | undefined;
 }) {
@@ -116,21 +116,21 @@ function TasksList({
     <div className="tasks-list">
       {[...byRepo.entries()].map(([repoName, repoGroups]) => {
         const sectionKey = `tasks:${repoName}`;
-        const closed = furled.has(sectionKey);
+        const sectionOpen = openKeys.has(sectionKey);
         const openCount = repoGroups.reduce((n, group) => n + group.tasks.filter((task) => task.status !== "completed").length, 0);
         return (
           <section key={sectionKey} className="tasks-section">
             <button type="button" className="tasks-section-head" onClick={() => onToggle(sectionKey)}>
               <span className="twist" aria-hidden="true">
-                {closed ? "▸" : "▾"}
+                {sectionOpen ? "▾" : "▸"}
               </span>
               <span className="tasks-section-name">{repoName}</span>
               <span className="tasks-count">{openCount}</span>
             </button>
-            {!closed &&
+            {sectionOpen &&
               repoGroups.map((group) => {
                 const branchKey = `tasks:${repoName}\0${group.branch ?? ""}`;
-                const branchClosed = furled.has(branchKey);
+                const branchOpen = openKeys.has(branchKey);
                 const done = group.tasks.filter((task) => task.status === "completed").length;
                 const total = group.tasks.length;
                 const open = total - done;
@@ -141,7 +141,7 @@ function TasksList({
                   <div key={branchKey} className="tasks-branch">
                     <button type="button" className="tasks-parent" onClick={() => onToggle(branchKey)}>
                       <span className="twist" aria-hidden="true">
-                        {branchClosed ? "▸" : "▾"}
+                        {branchOpen ? "▾" : "▸"}
                       </span>
                       <span className="task-mark" data-s={open === 0 ? "completed" : "pending"} aria-hidden="true">
                         {open === 0 ? "✓" : ""}
@@ -172,7 +172,7 @@ function TasksList({
                         ) : null}
                       </span>
                     </button>
-                    {!branchClosed && (
+                    {branchOpen && (
                       <ul className="tasks-children">
                         {group.tasks.map((task, index) => (
                           <li key={`${task.source}-${task.listId}-${task.id}`} className="tasks-child" data-s={task.status} data-last={index === group.tasks.length - 1 ? "1" : "0"}>
@@ -316,6 +316,7 @@ export default function Board() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [furled, setFurled] = useState<Set<string>>(() => new Set());
+  const [taskOpen, setTaskOpen] = useState<Set<string>>(() => new Set());
   const [commitsByKey, setCommitsByKey] = useState<Record<string, { sha: string; author: string; date: string; subject: string }[] | "error">>({});
   const [taskGroups, setTaskGroups] = useState<TaskGroup[] | null>(null);
   const [counts, setCounts] = useState<Record<string, number>>({});
@@ -352,6 +353,12 @@ export default function Board() {
     } catch {
       // Ignore a broken saved list.
     }
+    try {
+      const names = JSON.parse(localStorage.getItem("branchboard.taskOpen") ?? "[]") as unknown;
+      if (Array.isArray(names)) setTaskOpen(new Set(names.filter((name): name is string => typeof name === "string")));
+    } catch {
+      // Ignore a broken saved list. Tasks default closed.
+    }
   }, []);
 
   useEffect(() => {
@@ -363,6 +370,11 @@ export default function Board() {
     if (!filtersReady) return;
     localStorage.setItem("branchboard.furled", JSON.stringify([...furled]));
   }, [filtersReady, furled]);
+
+  useEffect(() => {
+    if (!filtersReady) return;
+    localStorage.setItem("branchboard.taskOpen", JSON.stringify([...taskOpen]));
+  }, [filtersReady, taskOpen]);
 
   function said(error: unknown) {
     const message = error instanceof Error ? error.message : "Request failed";
@@ -829,10 +841,10 @@ export default function Board() {
           ) : (
             <TasksList
               groups={taskGroups}
-              furled={furled}
+              openKeys={taskOpen}
               owner={data?.owner}
               onToggle={(key) =>
-                setFurled((current) => {
+                setTaskOpen((current) => {
                   const next = new Set(current);
                   if (next.has(key)) next.delete(key);
                   else next.add(key);
