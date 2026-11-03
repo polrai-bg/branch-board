@@ -2,6 +2,8 @@
 
 A local web page that lists every branch across your GitHub repos, which agent made it (Claude, Cursor, Codex, and others), its base, and whether it is merged, in review, or still in progress. Read-only. Runs on your Mac at `http://127.0.0.1:3000`.
 
+Visual direction lives in `DESIGN.md`: warm paper chrome, Claude Desktop calm, GitKraken-style scannable status.
+
 ## Setup
 
 Requirements: Node 20+, Git 2.40+, a GitHub fine-grained personal access token.
